@@ -1,11 +1,14 @@
 // 三栏布局的左栏：上下结构
-//   - 上：菜单（暂时占位图标按钮，未来可挂"概览 / 历史 / 收藏"等导航）
-//   - 中：ProjectTree —— 真正的项目管理区，按目录分组
-//   - 下：设置 / 个人档案（设置按钮从顶栏挪过来；档案占位）
+//   - 上：导航菜单（"所有项目" / "历史会话"切换中部视图；"收藏"占位）
+//   - 中：按 useUiStore.leftSidebarView 切换显示 ProjectTree 或 HistoryList
+//   - 下：主题 / 设置 / 个人档案（设置按钮从顶栏挪过来；档案占位）
 
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppStore } from "../../stores/useAppStore";
+import { useUiStore } from "../../stores/useUiStore";
+import { useTabsStore } from "../../stores/useTabsStore";
 import { ProjectTree } from "./ProjectTree";
+import { HistoryList } from "./HistoryList";
 
 interface MenuButtonProps {
   label: string;
@@ -38,14 +41,18 @@ export function SidebarLeft(): JSX.Element {
   const openSettingsModal = useSettingsStore((s) => s.openSettingsModal);
   const theme = useAppStore((s) => s.theme);
   const toggleTheme = useAppStore((s) => s.toggleTheme);
+  const leftSidebarView = useUiStore((s) => s.leftSidebarView);
+  const setLeftSidebarView = useUiStore((s) => s.setLeftSidebarView);
+  const historyCount = useTabsStore((s) => s.history.length);
 
   return (
     <aside className="flex h-full w-[260px] shrink-0 flex-col border-r border-black/5 bg-white/35 backdrop-blur-md dark:border-white/5 dark:bg-zinc-900/30">
-      {/* 顶部菜单 —— 占位 */}
+      {/* 顶部菜单 */}
       <div className="flex flex-col gap-0.5 border-b border-black/5 px-2 py-2 dark:border-white/5">
         <MenuButton
           label="所有项目"
-          active
+          active={leftSidebarView === "projects"}
+          onClick={() => setLeftSidebarView("projects")}
           icon={
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className="h-3.5 w-3.5">
               <path d="M2 4h6l1 1.5h5v6.5a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" />
@@ -53,7 +60,9 @@ export function SidebarLeft(): JSX.Element {
           }
         />
         <MenuButton
-          label="历史会话"
+          label={historyCount > 0 ? `历史会话 (${historyCount})` : "历史会话"}
+          active={leftSidebarView === "history"}
+          onClick={() => setLeftSidebarView("history")}
           icon={
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className="h-3.5 w-3.5">
               <circle cx="8" cy="8" r="6" />
@@ -71,8 +80,8 @@ export function SidebarLeft(): JSX.Element {
         />
       </div>
 
-      {/* 中部 ProjectTree */}
-      <ProjectTree />
+      {/* 中部按 view 切换 */}
+      {leftSidebarView === "history" ? <HistoryList /> : <ProjectTree />}
 
       {/* 底部菜单 */}
       <div className="flex flex-col gap-0.5 border-t border-black/5 px-2 py-2 dark:border-white/5">
