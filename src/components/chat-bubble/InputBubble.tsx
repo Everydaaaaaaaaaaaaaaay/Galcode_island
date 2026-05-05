@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, type KeyboardEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../../stores/useAppStore";
@@ -28,6 +28,9 @@ export function InputBubble(): JSX.Element {
 
   const [greeting, setGreeting] = useState("");
   const [displayedGreeting, setDisplayedGreeting] = useState("");
+  // 中文输入法 composition 期间不要把 Enter 当发送 — 双保险用 keydown.isComposing
+  // + composition* 事件标记
+  const isComposingRef = useRef(false);
 
   useEffect(() => {
     if (agentStatus === "idle") {
@@ -139,13 +142,24 @@ export function InputBubble(): JSX.Element {
             <textarea
               value={task}
               onChange={(e) => update({ task: e.target.value })}
-              placeholder="和团长对话……"
+              placeholder="和团长对话……  (Enter 发送，Shift+Enter 换行)"
               className="min-h-[100px] w-full resize-none rounded-xl border border-black/5 bg-white/50 p-3.5 text-sm text-zinc-800 outline-none transition-all placeholder:text-zinc-400 focus:border-sky-400/50 focus:bg-white/80 focus:ring-2 focus:ring-sky-400/15 dark:border-white/5 dark:bg-slate-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-sky-400/40 dark:focus:bg-slate-900/60 dark:focus:ring-sky-400/10"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void handleLaunch();
-                }
+              onCompositionStart={() => {
+                isComposingRef.current = true;
+              }}
+              onCompositionEnd={() => {
+                isComposingRef.current = false;
+              }}
+              onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
+                if (e.key !== "Enter") return;
+                if (e.shiftKey) return;
+                // IME 候选词期间按 Enter 是选词，跳过发送
+                const native = e.nativeEvent as KeyboardEvent["nativeEvent"] & {
+                  isComposing?: boolean;
+                };
+                if (native.isComposing || e.keyCode === 229 || isComposingRef.current) return;
+                e.preventDefault();
+                void handleLaunch();
               }}
             />
 
