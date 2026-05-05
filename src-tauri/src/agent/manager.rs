@@ -892,19 +892,46 @@ pub async fn stop_session(
     runtime_state: Arc<RuntimeState>,
     session_id: String,
 ) -> Result<(), String> {
-    let (snapshot, run_id, agent_type) = {
+    let (snapshot, run_id, agent_type, prior_status) = {
         let mut mgr = state.manager.lock().map_err(|e| e.to_string())?;
         mgr.clear_active_session_if(&session_id);
         let Some(sess) = mgr.sessions.get_mut(&session_id) else {
             return Err("会话不存在".into());
         };
-        let agent_type = sess
+        let (agent_type, prior_status) = sess
             .snapshot
             .lock()
-            .map(|s| s.agent_type.clone())
-            .unwrap_or_default();
-        (Arc::clone(&sess.snapshot), sess.run_id.clone(), agent_type)
+            .map(|s| (s.agent_type.clone(), s.status))
+            .unwrap_or_else(|_| (String::new(), AgentStatus::Idle));
+        (
+            Arc::clone(&sess.snapshot),
+            sess.run_id.clone(),
+            agent_type,
+            prior_status,
+        )
     };
+
+    // 关键判断：上一轮 session 已经 Completed / Error / Idle 了 —— 这是
+    // start_agent 内部 "清理上一轮 session 再启动新 turn" 路径的常见情况。
+    // 这种情形不应该再 abort backend 也不应该 emit "已停止" 事件
+    // （否则会污染刚启动的新 turn 的 ResultCard 显示，并把已经被新 turn
+    // 复用的 stream client 杀掉），只是从 manager.sessions 里清理掉旧条目即可。
+    let already_finished = matches!(
+        prior_status,
+        AgentStatus::Completed | AgentStatus::Error | AgentStatus::Idle
+    );
+    if already_finished {
+        eprintln!(
+            "[stop] skip abort: session={session_id} already in terminal status {prior_status:?}"
+        );
+        let _ = runtime_state;
+        let _ = app;
+        let _ = snapshot;
+        let _ = run_id;
+        let _ = agent_type;
+        return Ok(());
+    }
+
     if let Ok(mut s) = snapshot.lock() {
         s.interrupted = true;
         s.status = AgentStatus::Idle;
