@@ -8,7 +8,9 @@
 //   - SessionSnapshot 状态由 IPC events 透传给前端宠物气泡
 //   - 会话续接：每个 backend 自动捕获 session_id 存到 RuntimeState 里供下次 turn 复用
 
-use crate::agent::runtime::{ClaudeStreamClient, RuntimeState};
+use crate::agent::runtime::{
+    with_claude_state, with_codex_state, ClaudeStreamClient, RuntimeState, CODEX_SHARED_KEY,
+};
 use crate::agent::{claude as claude_agent, codex as codex_agent, opencode as opencode_agent};
 use crate::ipc::events::{self, SessionCompletePayload};
 use crate::llm::{
@@ -872,40 +874,98 @@ fn emit_err(
 // 停止会话
 // ---------------------------------------------------------------------------
 
-pub fn stop_session(
+/// 真正中断指定 session 的当前 turn。按 backend 类型分别处理：
+///
+/// - **claude-code**: per-tab 独立 stream client，take 走 client + kill 整个
+///   child process。后续 turn 在 ensure_claude_stream_client 里重启；
+///   resume_session 字段保留，下次会用 --resume 续上对话。
+/// - **codex**: 共享 app-server 不能杀（多 tab 共用），通过 active_turns
+///   找该 run_id 的 turn → take waiter 发 Err，让 turn 函数提前返回。
+/// - **opencode**: per-tab HTTP server child，复用 opencode_stop 杀掉整个
+///   server。后续 turn 在 launch_opencode_agent / opencode_start 里重启。
+///
+/// 中断后 emit `agent://session-complete` mode=error 让前端从 running
+/// 状态退出，避免界面卡在"运行中"。
+pub async fn stop_session(
     app: AppHandle,
     state: Arc<AppState>,
     runtime_state: Arc<RuntimeState>,
     session_id: String,
 ) -> Result<(), String> {
-    let (snapshot, run_id) = {
+    let (snapshot, run_id, agent_type) = {
         let mut mgr = state.manager.lock().map_err(|e| e.to_string())?;
         mgr.clear_active_session_if(&session_id);
         let Some(sess) = mgr.sessions.get_mut(&session_id) else {
             return Err("会话不存在".into());
         };
-        (Arc::clone(&sess.snapshot), sess.run_id.clone())
+        let agent_type = sess
+            .snapshot
+            .lock()
+            .map(|s| s.agent_type.clone())
+            .unwrap_or_default();
+        (Arc::clone(&sess.snapshot), sess.run_id.clone(), agent_type)
     };
     if let Ok(mut s) = snapshot.lock() {
         s.interrupted = true;
         s.status = AgentStatus::Idle;
     }
 
-    // claude / codex / opencode 的 client 在 RuntimeState 里。
-    // 当前实现：不杀整个 client（避免影响其他可能正在跑的 turn 复用）。
-    // app 退出时统一 drain_*_clients 清理。
-    // 要单独中断当前 turn 需要给每个 backend 加 abort_turn 接口。
-    let _ = runtime_state;
+    match agent_type.as_str() {
+        "claude-code" => {
+            // 取出该 tab 的 claude client 并 kill 进程；下次 turn 自动重 spawn
+            let client = with_claude_state(&runtime_state, &run_id, |st| st.client.take())
+                .ok()
+                .flatten();
+            if let Some(client) = client {
+                kill_claude_client(&client);
+                eprintln!("[stop] claude killed for run_id={run_id}");
+            }
+        }
+        "codex" => {
+            // 共享 app-server：只中断该 run_id 的 turn，不杀进程
+            let client = with_codex_state(&runtime_state, CODEX_SHARED_KEY, |st| st.client.clone())
+                .ok()
+                .flatten();
+            if let Some(client) = client {
+                let aborted = client.abort_turns_for_run(&run_id);
+                eprintln!("[stop] codex aborted {aborted} turn(s) for run_id={run_id}");
+            }
+        }
+        "opencode" => {
+            if let Err(e) =
+                crate::agent::opencode::opencode_stop(&runtime_state, &run_id).await
+            {
+                eprintln!("[stop] opencode_stop failed for run_id={run_id}: {e}");
+            }
+        }
+        other => {
+            eprintln!("[stop] unknown agent_type={other}, only emit idle event");
+        }
+    }
 
+    // 让前端的 ResultCard 出现"已停止"提示；TabBar 状态点回归 idle
     let _ = app.emit(
         "agent://status-changed",
         events::StatusChangedPayload {
             session_id: session_id.clone(),
-            run_id: Some(run_id),
+            run_id: Some(run_id.clone()),
             status: AgentStatus::Idle,
             tool_name: None,
             tool_description: Some("stopped".into()),
             percent: None,
+        },
+    );
+    let _ = app.emit(
+        "agent://session-complete",
+        SessionCompletePayload {
+            session_id: session_id.clone(),
+            run_id: Some(run_id),
+            mode: Some("error".into()),
+            emotion: Some("任务已停止".into()),
+            summary_translation: Some("用户中断了任务。".into()),
+            result_raw: None,
+            result_zh: None,
+            suggestion_options: Some(vec!["重试".into()]),
         },
     );
 

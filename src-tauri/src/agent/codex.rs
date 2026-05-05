@@ -323,6 +323,46 @@ impl CodexAppServerClient {
         }
     }
 
+    /// 中断指定 run_id 的所有正在跑的 turn：take 出 waiter 发 Err，让
+    /// `run_codex_app_server_turn` 的 rx.recv 提前 return；同时清理
+    /// 该 run_id 关联的 thread_streams / thread_run_ids 条目。
+    /// 共享 app-server 进程不动，其他 tab 不受影响。返回中断的 turn 数。
+    pub fn abort_turns_for_run(&self, run_id: &str) -> usize {
+        let mut aborted = 0usize;
+        let dead_threads: Vec<String> = if let Ok(mut turns) = self.active_turns.lock() {
+            let to_remove: Vec<String> = turns
+                .iter()
+                .filter(|(_, turn)| turn.run_id == run_id)
+                .map(|(id, _)| id.clone())
+                .collect();
+            let mut threads: Vec<String> = Vec::new();
+            for tid in &to_remove {
+                if let Some(mut turn) = turns.remove(tid) {
+                    threads.push(turn.thread_id.clone());
+                    if let Some(waiter) = turn.waiter.take() {
+                        let _ = waiter.send(Err("用户中断了任务".to_string()));
+                        aborted += 1;
+                    }
+                }
+            }
+            threads
+        } else {
+            Vec::new()
+        };
+
+        if let Ok(mut streams) = self.thread_streams.lock() {
+            for tid in &dead_threads {
+                streams.remove(tid);
+            }
+        }
+        if let Ok(mut map) = self.thread_run_ids.lock() {
+            for tid in &dead_threads {
+                map.remove(tid);
+            }
+        }
+        aborted
+    }
+
     pub fn send_request(
         &self,
         method: &str,

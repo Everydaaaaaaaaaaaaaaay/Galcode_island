@@ -83,10 +83,10 @@ pub fn select_project_folder(app: AppHandle) -> Result<Option<String>, String> {
 /// 多 tab 模式下，**不再**强行 stop 上一个 active_session：
 /// 每个 tab 独立运行，互不干扰；只有传入相同 run_id 时才会替换原有任务。
 #[tauri::command]
-pub fn start_agent(
+pub async fn start_agent(
     app: AppHandle,
-    state: State<Arc<AppState>>,
-    runtime_state: State<Arc<RuntimeState>>,
+    state: State<'_, Arc<AppState>>,
+    runtime_state: State<'_, Arc<RuntimeState>>,
     user_input_zh: String,
     cwd: Option<String>,
     agent: Option<String>,
@@ -118,7 +118,8 @@ pub fn start_agent(
             Arc::clone(state.inner()),
             Arc::clone(runtime_state.inner()),
             sid,
-        );
+        )
+        .await;
     }
 
     let result = match agent_type.as_str() {
@@ -160,10 +161,10 @@ pub fn start_agent(
 /// 优先级：`session_id` > `run_id` 反查会话 > active_session 兜底。
 /// 多 tab 模式下推荐传 `run_id`：从该 tab 的 sessions 里找当前 active 的会话停掉。
 #[tauri::command]
-pub fn stop_agent(
+pub async fn stop_agent(
     app: AppHandle,
-    state: State<Arc<AppState>>,
-    runtime_state: State<Arc<RuntimeState>>,
+    state: State<'_, Arc<AppState>>,
+    runtime_state: State<'_, Arc<RuntimeState>>,
     session_id: Option<String>,
     run_id: Option<String>,
 ) -> Result<(), String> {
@@ -192,6 +193,7 @@ pub fn stop_agent(
         Arc::clone(runtime_state.inner()),
         sid,
     )
+    .await
 }
 
 #[tauri::command]
