@@ -3,14 +3,18 @@ import { invoke } from "@tauri-apps/api/core";
 import type { MouseEvent } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { useActiveTab, useActiveTabActions } from "../hooks/useActiveTab";
+import { TabBar } from "./TabBar";
 
 export function GlobalTopBar(): JSX.Element {
   const theme = useAppStore((s) => s.theme);
   const toggleTheme = useAppStore((s) => s.toggleTheme);
-  const uiState = useAppStore((s) => s.uiState);
-  const resetSession = useAppStore((s) => s.resetSession);
+  const isStarted = useAppStore((s) => s.isStarted);
   const addLogEntry = useAppStore((s) => s.addLogEntry);
   const openSettingsModal = useSettingsStore((s) => s.openSettingsModal);
+  const tab = useActiveTab();
+  const { activeTabId, reset } = useActiveTabActions();
+  const uiState = tab.uiState;
   const appWindow = getCurrentWindow();
 
   const handleDragMouseDown = async (event: MouseEvent<HTMLDivElement>): Promise<void> => {
@@ -22,23 +26,41 @@ export function GlobalTopBar(): JSX.Element {
     }
   };
 
-  const handleStop = async () => {
+  const handleStop = async (): Promise<void> => {
     try {
-      await invoke("stop_agent", {});
-      resetSession();
-      addLogEntry({ timestamp: Date.now(), level: "info", message: "已停止 Agent。" });
+      // 多 tab：只停当前 tab 的会话；其他 tab 的并发 turn 不受影响
+      await invoke("stop_agent", {
+        runId: activeTabId,
+        sessionId: tab.sessionId,
+      });
+      reset();
+      addLogEntry({ timestamp: Date.now(), level: "info", message: "已停止当前 tab 的 Agent。" });
     } catch (err) {
       addLogEntry({ timestamp: Date.now(), level: "error", message: `stop: ${String(err)}` });
     }
   };
 
   return (
-    <header className="absolute top-0 left-0 z-[100] flex h-10 w-full items-center justify-between px-3 pt-1">
+    <header className="absolute top-0 left-0 z-[100] flex h-10 w-full items-center gap-2 px-3 pt-1">
+      {/* 左侧固定的 drag 把手（mac 红绿灯位置预留 + 拖动手感） */}
       <div
         data-tauri-drag-region
         onMouseDown={(event) => { void handleDragMouseDown(event); }}
-        className="h-full flex-1"
+        className="h-full w-16 shrink-0"
       />
+
+      {/* TabBar 占据中部大部分空间 —— 仅在主界面显示 */}
+      {isStarted ? (
+        <div className="flex min-w-0 flex-1 items-center">
+          <TabBar />
+        </div>
+      ) : (
+        <div
+          data-tauri-drag-region
+          onMouseDown={(event) => { void handleDragMouseDown(event); }}
+          className="h-full flex-1"
+        />
+      )}
 
       <div className="flex items-center gap-3 pr-1">
         {uiState === "running" ? (

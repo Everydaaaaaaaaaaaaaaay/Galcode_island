@@ -1,6 +1,8 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../stores/useAppStore";
+import { useActiveTab, useActiveTabActions } from "../hooks/useActiveTab";
 import { PetCharacter } from "./pet-character/PetCharacter";
 import type { AgentType } from "../types/agent";
 
@@ -9,8 +11,54 @@ import { ResultCard } from "./chat-bubble/ResultCard";
 import { RunningBubble } from "./chat-bubble/RunningBubble";
 import { StatusMonitor } from "./status-monitor/StatusMonitor";
 
+function deriveTitleFromPath(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+/// 顶部"项目路径"按钮：未选时显示"选择项目"，已选时显示路径，点击都能换路径。
+function ProjectPathButton(): JSX.Element {
+  const tab = useActiveTab();
+  const { update } = useActiveTabActions();
+  const projectPath = tab.projectPath;
+
+  const handlePick = async (): Promise<void> => {
+    try {
+      const result = await open({ directory: true });
+      if (!result) return;
+      const path = Array.isArray(result) ? result[0] : result;
+      // 项目路径变了顺便重命名 tab title（用户没改过标题时才更新，避免覆盖手动重命名）
+      const isAutoTitle = !tab.title || tab.title === "新会话" || tab.title === deriveTitleFromPath(tab.projectPath ?? "");
+      update({
+        projectPath: path,
+        title: isAutoTitle ? deriveTitleFromPath(path) : tab.title,
+      });
+    } catch {
+      /* 用户取消 / 平台不支持，忽略 */
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void handlePick()}
+      title={projectPath ? `点击切换项目（当前：${projectPath}）` : "选择项目目录"}
+      className={`truncate rounded px-1.5 py-0.5 text-[11px] transition-colors ${
+        projectPath
+          ? "text-zinc-500/85 hover:bg-black/5 dark:text-zinc-400/85 dark:hover:bg-white/5"
+          : "text-amber-600/90 hover:bg-amber-400/15 dark:text-amber-300/90"
+      }`}
+    >
+      {projectPath ?? "选择项目"}
+    </button>
+  );
+}
+
+/// 切换当前 tab 用的 backend。
+/// 同时同步到 useAppStore.selectedAgent 作为下次新建 tab 的默认值。
 function AgentSelector(): JSX.Element {
-  const selectedAgent = useAppStore((s) => s.selectedAgent);
+  const tab = useActiveTab();
+  const { update } = useActiveTabActions();
   const setSelectedAgent = useAppStore((s) => s.setSelectedAgent);
   const [isOpen, setIsOpen] = useState(false);
 
@@ -19,7 +67,7 @@ function AgentSelector(): JSX.Element {
     { value: "opencode", label: "OpenCode" },
     { value: "codex", label: "Codex" },
   ];
-  const selectedLabel = options.find((o) => o.value === selectedAgent)?.label ?? "Claude Code";
+  const selectedLabel = options.find((o) => o.value === tab.agent)?.label ?? "Claude Code";
 
   return (
     <div className="relative inline-block text-left">
@@ -46,6 +94,7 @@ function AgentSelector(): JSX.Element {
                 <button
                   key={opt.value}
                   onClick={() => {
+                    update({ agent: opt.value });
                     setSelectedAgent(opt.value);
                     setIsOpen(false);
                   }}
@@ -63,7 +112,7 @@ function AgentSelector(): JSX.Element {
 }
 
 function StatusLight(): JSX.Element {
-  const agentStatus = useAppStore((s) => s.agentStatus);
+  const agentStatus = useActiveTab().agentStatus;
   const isRunning = agentStatus === "running" || agentStatus === "thinking" || agentStatus === "processing";
   const isError = agentStatus === "error";
   const bg = isRunning ? "bg-sky-400" : isError ? "bg-rose-400" : "bg-emerald-400";
@@ -80,13 +129,11 @@ function StatusLight(): JSX.Element {
 }
 
 export function MainView(): JSX.Element {
-  const projectPath = useAppStore((s) => s.projectPath);
-  const uiState = useAppStore((s) => s.uiState);
-  const mode = useAppStore((s) => s.mode);
-  const cliBlockCount = useAppStore((s) => s.cliBlocks.length);
+  const tab = useActiveTab();
+  const uiState = tab.uiState;
+  const mode = tab.mode;
+  const cliBlockCount = tab.cliBlocks.length;
   // 完成后保留 StatusMonitor 让 BlockStream 历史可见，跟 ResultCard 共存。
-  // 下一轮提交时 InputBubble.handleLaunch 会 setSessionId(null) → useCliStream
-  // 自动 clearCliBlocks，StatusMonitor 显示空占位再开始新一轮累积。
   const showStatus =
     uiState === "running" ||
     mode === "working" ||
@@ -101,13 +148,11 @@ export function MainView(): JSX.Element {
       transition={{ duration: 0.42, ease: "easeOut" }}
       className="mx-auto flex h-full w-full max-w-7xl flex-col gap-3 px-4 py-3"
     >
-      {/* Top Header — 单行紧凑：Agent 选择 + 工程路径 + 状态灯 */}
+      {/* Top Header — 单行紧凑：Agent 选择 + 工程路径（按钮） + 状态灯 */}
       <div className="flex items-center justify-between gap-3 border-b border-black/5 pb-1.5 dark:border-white/5">
         <div className="flex min-w-0 items-center gap-2">
           <AgentSelector />
-          <span className="truncate text-[11px] text-zinc-500/85 dark:text-zinc-400/85">
-            {projectPath ?? "未选择工程"}
-          </span>
+          <ProjectPathButton />
         </div>
         <StatusLight />
       </div>
