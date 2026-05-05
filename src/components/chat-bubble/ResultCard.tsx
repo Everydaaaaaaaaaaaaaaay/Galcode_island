@@ -22,18 +22,17 @@ export function ResultCard(): JSX.Element {
     mode === "error";
 
   /// 点选项 = 立即启动新一轮（不回 idle，避免 InputBubble 还没显示就把上一轮的
-  /// 状态条都清掉造成"白屏"）。仍然在同一个 tab 内继续，只是清空上一轮结果。
+  /// 状态条都清掉造成"白屏"）。仍然在同一个 tab 内继续。
+  /// **不清 cliBlocks** —— 单项目多轮会话累积保留；上一轮结果字段也保留，
+  /// 新 turn 完成时被新的 session-complete 事件覆盖（RunningBubble 期间显示中）。
   const handleOptionClick = async (opt: string): Promise<void> => {
     if (!activeTabId) return;
+    // backend native session id 作 resume hint（Claude CLI session / Codex thread /
+    // OpenCode session），让上下文延续；前端 sessionId 是 AgentSession UUID 不能用
+    const resumeHint = tab.agentNativeSessionId;
     update({
       task: opt,
-      sessionId: null,
       percent: 0,
-      resultZh: "",
-      summaryTranslation: "",
-      emotionText: "",
-      suggestionOptions: [],
-      cliBlocks: [],
       uiState: "running",
       mode: "working",
       agentStatus: "running",
@@ -47,6 +46,7 @@ export function ResultCard(): JSX.Element {
         cwd: tab.projectPath || ".",
         agent: tab.agent,
         runId: activeTabId,
+        sessionId: resumeHint,
       });
       if (res?.sessionId) update({ sessionId: res.sessionId });
     } catch (err) {

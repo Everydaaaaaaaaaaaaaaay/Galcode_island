@@ -45,8 +45,14 @@ export interface TabState {
   bubble: string;
   /// 进度条百分比
   percent: number;
-  /// 后端 session_id（claude/codex/opencode 各自的会话标识，用于续接）
+  /// 后端 session_id（前端 AgentSession UUID）—— 跟下面的 agentNativeSessionId
+  /// 不一样：这个是每轮新生成的，仅作 IPC 事件 fallback 路由。
   sessionId: string | null;
+  /// **真正能用于 resume 的 backend native session id**：Claude CLI session id /
+  /// Codex thread id / OpenCode session id。每轮 turn 完成时由
+  /// session-complete.agentNativeSessionId 更新；持久化后下次 launch 传给后端
+  /// 当 resume hint，--resume 才能真正续上 conversation。
+  agentNativeSessionId: string | null;
   /// 完成后的中文翻译输出
   resultZh: string;
   /// 凉宫春日总结
@@ -93,9 +99,12 @@ export interface ArchivedSession {
   projectPath: string | null;
   /// 摘要标题：lastUserPrompt > task > title
   summary: string;
-  /// 后端 sessionId：恢复 tab 时塞回去当 resume hint（实际能否续接看后端是否还
-  /// 在 last_session_per_context 里记得；不能续也不影响功能）
+  /// 前端 sessionId：恢复 tab 时仅用于 IPC fallback；真正续 conversation 看
+  /// agentNativeSessionId 字段
   sessionId: string | null;
+  /// backend native session id —— 真正能让 Claude `--resume` / Codex `thread/resume`
+  /// / OpenCode 复用 session 续上对话的那个 ID
+  agentNativeSessionId: string | null;
   /// 上次的 ResultCard 内容，恢复 tab 时回填，让用户能快速看到上次的结果
   summaryTranslation: string;
   emotionText: string;
@@ -173,6 +182,7 @@ function makeDefaultTab(init?: Partial<TabState>): TabState {
     bubble: init?.bubble ?? "",
     percent: init?.percent ?? 0,
     sessionId: init?.sessionId ?? null,
+    agentNativeSessionId: init?.agentNativeSessionId ?? null,
     resultZh: init?.resultZh ?? "",
     summaryTranslation: init?.summaryTranslation ?? "",
     emotionText: init?.emotionText ?? "",
@@ -293,6 +303,7 @@ export const useTabsStore = create<TabsStoreState>()(
         projectPath: tab.projectPath,
         summary,
         sessionId: tab.sessionId,
+        agentNativeSessionId: tab.agentNativeSessionId,
         summaryTranslation: tab.summaryTranslation,
         emotionText: tab.emotionText,
         resultZh: tab.resultZh,
@@ -426,6 +437,7 @@ export const useTabsStore = create<TabsStoreState>()(
       agent: archived.agent,
       projectPath: archived.projectPath,
       sessionId: archived.sessionId,
+      agentNativeSessionId: archived.agentNativeSessionId,
       lastUserPrompt: archived.summary,
       summaryTranslation: archived.summaryTranslation,
       emotionText: archived.emotionText,

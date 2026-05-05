@@ -98,6 +98,9 @@ function resumePendingFinalize(): void {
       sessionId: tab.sessionId ?? "",
       userZh: tab.pendingUserZh,
       resultRaw: tab.pendingResultRaw,
+      // 透传 backend native id 让 finalize_pending 在 emit session-complete
+      // 时一并塞回前端 —— 接续完成后 tab 还是有正确的 native id 可以继续 resume
+      agentNativeSessionId: tab.agentNativeSessionId ?? null,
     }).catch((err) => {
       useAppStore.getState().addLogEntry({
         timestamp: Date.now(),

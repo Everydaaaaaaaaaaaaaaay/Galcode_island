@@ -129,19 +129,22 @@ impl AgentManager {
         Ok(())
     }
 
-    fn remember_session(&mut self, agent_type: &str, cwd: &str, session_id: &str) {
+    /// 记下"某 tab 的某 backend 上一轮拿到的 session_id"，下次同 tab 启动新
+    /// turn 时用它 resume conversation。索引 key 是 `(agent_type, run_id)` —
+    /// **不再按 cwd 索引** —— 每个 tab 独立一份，避免同目录多 tab 串台。
+    fn remember_session(&mut self, agent_type: &str, run_id: &str, session_id: &str) {
         if session_id.trim().is_empty() {
             return;
         }
         self.last_session_per_context.insert(
-            (agent_type.to_string(), cwd.to_string()),
+            (agent_type.to_string(), run_id.to_string()),
             session_id.to_string(),
         );
     }
 
-    fn last_session_for(&self, agent_type: &str, cwd: &str) -> Option<String> {
+    fn last_session_for(&self, agent_type: &str, run_id: &str) -> Option<String> {
         self.last_session_per_context
-            .get(&(agent_type.to_string(), cwd.to_string()))
+            .get(&(agent_type.to_string(), run_id.to_string()))
             .cloned()
     }
 }
@@ -168,6 +171,9 @@ pub fn launch_claude_agent(
     run_id: String,
     cwd: String,
     task_zh: String,
+    // 前端持久化的 tab.sessionId hint：用作 resume 候选。重启 app 后内存
+    // last_session_per_context 空了，前端持久化的 sessionId 能续上下文。
+    resume_hint: Option<String>,
 ) -> Result<LaunchResult, String> {
     let trimmed = task_zh.trim().to_string();
     if trimmed.is_empty() {
@@ -188,9 +194,13 @@ pub fn launch_claude_agent(
         sn.status = AgentStatus::Running;
     }
 
+    // resume 优先级：内存 last_session_per_context（同 app 会话连续轮次）→
+    // 前端 resume_hint（持久化恢复用，覆盖空的内存值）。两者非空时取内存里的
+    // —— 内存版本是同 app 会话最新一轮的真相，比磁盘旧值更准。
     let resume_session_id = {
         let mgr = state.manager.lock().map_err(|e| e.to_string())?;
-        mgr.last_session_for("claude-code", &cwd)
+        mgr.last_session_for("claude-code", &run_id)
+            .or_else(|| resume_hint.clone().filter(|s| !s.trim().is_empty()))
     };
 
     {
@@ -255,9 +265,9 @@ pub fn launch_claude_agent(
                     dur_turn.as_millis(),
                     output_en.len()
                 );
-                if let Some(next_sid) = next_session_id {
+                if let Some(ref next_sid) = next_session_id {
                     if let Ok(mut mgr) = state_clone.manager.lock() {
-                        mgr.remember_session("claude-code", &cwd_owned, &next_sid);
+                        mgr.remember_session("claude-code", &run_id, next_sid);
                     }
                 }
                 // 在跑 finalize 之前 emit agent turn 的英文原文，让前端持久化
@@ -281,6 +291,7 @@ pub fn launch_claude_agent(
                     &user_zh,
                     output_en,
                     llm.as_ref(),
+                    next_session_id.clone(),
                 );
                 let dur_post = t_post_start.elapsed();
                 let dur_total = t0.elapsed();
@@ -320,6 +331,8 @@ pub fn launch_codex_agent(
     run_id: String,
     cwd: String,
     task_zh: String,
+    // 前端持久化的 tab.sessionId（codex 这里其实是 thread_id）hint：作 resume 候选。
+    resume_hint: Option<String>,
 ) -> Result<LaunchResult, String> {
     let trimmed = task_zh.trim().to_string();
     if trimmed.is_empty() {
@@ -342,7 +355,8 @@ pub fn launch_codex_agent(
 
     let resume_thread_id = {
         let mgr = state.manager.lock().map_err(|e| e.to_string())?;
-        mgr.last_session_for("codex", &cwd)
+        mgr.last_session_for("codex", &run_id)
+            .or_else(|| resume_hint.clone().filter(|s| !s.trim().is_empty()))
     };
 
     {
@@ -409,7 +423,7 @@ pub fn launch_codex_agent(
                     output_en.len()
                 );
                 if let Ok(mut mgr) = state_clone.manager.lock() {
-                    mgr.remember_session("codex", &cwd_owned, &thread_id);
+                    mgr.remember_session("codex", &run_id, &thread_id);
                 }
                 // 在跑 finalize 之前 emit agent turn 的英文原文，让前端持久化
                 // 备用：用户在翻译/总结过程中退出 app，重启时 reattach 会拿这个
@@ -432,6 +446,7 @@ pub fn launch_codex_agent(
                     &user_zh,
                     output_en,
                     llm.as_ref(),
+                    Some(thread_id.clone()),
                 );
                 let dur_post = t_post_start.elapsed();
                 let dur_total = t0.elapsed();
@@ -471,6 +486,8 @@ pub fn launch_opencode_agent(
     run_id: String,
     cwd: String,
     task_zh: String,
+    // 前端持久化的 tab.sessionId（OpenCode 的 session id）hint：作 resume 候选。
+    resume_hint: Option<String>,
 ) -> Result<LaunchResult, String> {
     let trimmed = task_zh.trim().to_string();
     if trimmed.is_empty() {
@@ -493,7 +510,8 @@ pub fn launch_opencode_agent(
 
     let resume_session_id = {
         let mgr = state.manager.lock().map_err(|e| e.to_string())?;
-        mgr.last_session_for("opencode", &cwd)
+        mgr.last_session_for("opencode", &run_id)
+            .or_else(|| resume_hint.clone().filter(|s| !s.trim().is_empty()))
     };
 
     {
@@ -619,7 +637,7 @@ pub fn launch_opencode_agent(
                     output_en.len()
                 );
                 if let Ok(mut mgr) = state_clone.manager.lock() {
-                    mgr.remember_session("opencode", &cwd_owned, &session_for_turn);
+                    mgr.remember_session("opencode", &run_id, &session_for_turn);
                 }
                 // emit agent 英文原文给前端持久化（参见 claude/codex 同处注释）
                 let _ = app_handle.emit(
@@ -637,6 +655,7 @@ pub fn launch_opencode_agent(
                 let state_for_finalize = Arc::clone(&state_clone);
                 let sid_for_finalize = sid.clone();
                 let user_zh_for_finalize = user_zh.clone();
+                let native_for_finalize = Some(session_for_turn.clone());
                 let _ = tauri::async_runtime::spawn_blocking(move || {
                     finalize_session(
                         &app_for_finalize,
@@ -645,6 +664,7 @@ pub fn launch_opencode_agent(
                         &user_zh_for_finalize,
                         output_en,
                         llm.as_ref(),
+                        native_for_finalize,
                     );
                 })
                 .await;
@@ -794,6 +814,9 @@ fn finalize_session(
     user_zh: &str,
     result_en: String,
     llm: Option<&LlmConfig>,
+    // backend native session/thread id（Claude CLI session / Codex thread / OpenCode session）
+    // —— emit 给前端持久化，重启后做 resume hint 才能真正续 conversation
+    native_session_id: Option<String>,
 ) {
     let (snapshot, run_id) = match state.manager.lock() {
         Ok(mgr) => mgr
@@ -828,6 +851,7 @@ fn finalize_session(
         SessionCompletePayload {
             session_id: session_id.to_string(),
             run_id: run_id.clone(),
+            agent_native_session_id: native_session_id,
             mode: mode.clone(),
             emotion: emotion.clone(),
             summary_translation: summary_translation.clone(),
@@ -867,6 +891,7 @@ fn fail_session(
         SessionCompletePayload {
             session_id: session_id.to_string(),
             run_id: run_id.clone(),
+            agent_native_session_id: None,
             mode: Some("error".into()),
             emotion: Some(format!("Agent 出错了: {}", message)),
             summary_translation: Some(message.to_string()),
@@ -1059,6 +1084,7 @@ pub async fn stop_session(
         SessionCompletePayload {
             session_id: session_id.clone(),
             run_id: Some(run_id),
+            agent_native_session_id: None,
             mode: Some("error".into()),
             emotion: Some("任务已停止".into()),
             summary_translation: Some("用户中断了任务。".into()),

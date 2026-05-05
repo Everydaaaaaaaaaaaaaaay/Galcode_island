@@ -54,19 +54,22 @@ export function InputBubble(): JSX.Element {
   const handleLaunch = async (): Promise<void> => {
     if (!task.trim() || !activeTabId || !projectPath) return;
     try {
-      // 重置该 tab 的会话级字段（保留 task / agent / projectPath / title）；
-      // 然后置 running 状态、清掉 sessionId（让 IPC 早期事件按 fallback 路由进来）
+      // 上一轮 backend native session id（Claude CLI session / Codex thread /
+      // OpenCode session）作为 resume 候选 —— 重启 app 后内存 last_session_per_context
+      // 是空的，前端持久化的 native id 能续上下文。**不能传 tab.sessionId**（那是
+      // 前端 AgentSession UUID，跟后端 --resume 期望的 ID 不是一回事）。
+      const resumeHint = tab.agentNativeSessionId;
+
+      // 切到 running 状态。
+      // **不清 cliBlocks** —— 单项目多轮会话累积保留，让用户能看到完整工作历史；
+      // 也不清上次的 resultZh / summary / emotion / suggestionOptions —— uiState=running
+      // 期间 RunningBubble 会盖住 ResultCard，新 turn 完成时这些字段被新的
+      // session-complete 事件覆盖。
       update({
-        sessionId: null,
         percent: 0,
         uiState: "running",
         mode: "working",
         agentStatus: "running",
-        cliBlocks: [],
-        resultZh: "",
-        summaryTranslation: "",
-        emotionText: "",
-        suggestionOptions: [],
         lastUserPrompt: task.trim().slice(0, 80),
         lastActiveAt: Date.now(),
       });
@@ -76,6 +79,7 @@ export function InputBubble(): JSX.Element {
         cwd: projectPath || ".",
         agent: tab.agent,
         runId: activeTabId,
+        sessionId: resumeHint,
       });
       if (res?.sessionId) {
         update({ sessionId: res.sessionId });

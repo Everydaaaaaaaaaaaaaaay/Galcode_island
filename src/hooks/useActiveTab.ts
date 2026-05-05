@@ -24,6 +24,7 @@ const EMPTY_TAB: TabState = Object.freeze({
   bubble: "",
   percent: 0,
   sessionId: null,
+  agentNativeSessionId: null,
   resultZh: "",
   summaryTranslation: "",
   emotionText: "",

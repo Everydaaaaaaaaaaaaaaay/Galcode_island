@@ -130,7 +130,7 @@ export function useAgentIPC(): void {
           ensureSessionLinked(tabId, p?.sessionId);
 
           const update = useTabsStore.getState().updateTab;
-          update(tabId, {
+          const patch: Partial<TabState> = {
             uiState: "done",
             percent: 100,
             lastStage: "done",
@@ -144,7 +144,13 @@ export function useAgentIPC(): void {
             // finalize 已经走完，清掉中间结果防止下次启动重复触发 finalize_pending
             pendingResultRaw: null,
             pendingUserZh: null,
-          });
+          };
+          // 后端 native session id 仅在成功完成时存在；错误 / 用户中断的
+          // session-complete 不带这个字段，保留之前的 hint 不动
+          if (p.agentNativeSessionId) {
+            patch.agentNativeSessionId = p.agentNativeSessionId;
+          }
+          update(tabId, patch);
 
           // 非活动 tab 完成时打未读小红点（D 阶段 TabBar 会显示）
           const activeId = useTabsStore.getState().activeTabId;
