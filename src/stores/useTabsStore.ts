@@ -61,6 +61,12 @@ export interface TabState {
   cliBlocks: CliBlock[];
   /// 非活动 tab 完成后置 true，TabBar 显示小红点；切到该 tab 自动清掉
   hasUnread: boolean;
+  /// agent turn 完成、finalize（翻译+总结）跑到一半时退出 app 用：后端在
+  /// finalize 之前 emit `agent://result-raw`，前端写入这两个字段并持久化；
+  /// 重启时 useTabsReattach 检测到非空就调 finalize_pending 自动接续，
+  /// session-complete 到来时清空。null 表示当前没有 pending finalize。
+  pendingResultRaw: string | null;
+  pendingUserZh: string | null;
   /// 创建时间戳，用来排序 / 关闭时回退到上一个
   createdAt: number;
 }
@@ -127,28 +133,59 @@ function makeDefaultTab(init?: Partial<TabState>): TabState {
     emotionText: init?.emotionText ?? "",
     suggestionOptions: init?.suggestionOptions ?? [],
     lastStage: init?.lastStage ?? "default",
+    pendingResultRaw: init?.pendingResultRaw ?? null,
+    pendingUserZh: init?.pendingUserZh ?? null,
     cliBlocks: init?.cliBlocks ?? [],
     hasUnread: init?.hasUnread ?? false,
     createdAt: 0,
   };
 }
 
-/// 持久化时跳过的"运行时"字段。重启后这些都按默认值重置：
-///   - cliBlocks：流式数据，太大；后端进程已经死了，重发不了
-///   - task：输入框残留意义不大
-///   - percent / bubble / agentStatus / uiState：运行时状态，要么 reattach
-///     拿后端真相，要么按 idle 起步
-///   - hasUnread：让用户自己看 TabBar 有没有事再决定
+/// 持久化时单 tab 最多保留多少个 cliBlocks。
+/// localStorage 单 origin 配额一般 5–10MB，几个 tab 各几百个 block 容易撞上限；
+/// 限制到 120 块就够回看上次工作过程的关键节点（也是 store 内存里 MAX 的 60%）。
+/// 启动后用户可以正常累积新 block，超过 200 时仍按内存里的 trim 策略截断。
+const PERSIST_BLOCKS_PER_TAB = 120;
+
+/// `mode` 字段是混合语义：既包含**结果态**（complete / suggestion / error / idle），
+/// 也包含**过程态**（thinking / working）。持久化时过程态没有意义（进程已死），
+/// 但要保留结果态让 ResultCard 重启后能显示上次完成的总结。
+const MODE_RESULT_STATES = new Set(["complete", "suggestion", "error", "idle"]);
+
+/// 准备 localStorage 快照：保留过去工作进度（cliBlocks / task / 上次结果），
+/// 只重置真正"运行时一次性"的字段。
+///   - percent / bubble：进度文字，进程已死无意义
+///   - agentStatus / uiState：运行状态由 reattach + 实际 list_sessions 决定
+///   - mode：过程态（thinking/working）一律改 idle，否则重启后 RunningBubble 会
+///     误判"还在跑"显示"AGENT 正在全力执行…"；结果态（complete/suggestion/error）
+///     保留让 ResultCard 能续显示上次总结
+/// 保留：
+///   - cliBlocks：BlockStream 重启后能继续显示上次工作的全过程（裁剪到最近 N 块）
+///   - task：输入框半成品，让用户切回来继续打
+///   - hasUnread：跨 tab 红点状态保留，用户能记住哪个 tab 还没看
+///   - resultZh / summary / emotion / suggestionOptions：右下结果卡内容
+///   - lastStage：影响 PetCharacter 立绘
 function sanitizeTabForPersist(tab: TabState): TabState {
+  const trimmedBlocks =
+    tab.cliBlocks.length > PERSIST_BLOCKS_PER_TAB
+      ? tab.cliBlocks.slice(-PERSIST_BLOCKS_PER_TAB)
+      : tab.cliBlocks;
+  // 过程态的 mode 改 idle；结果态保留
+  const sanitizedMode = MODE_RESULT_STATES.has(tab.mode) ? tab.mode : "idle";
+  // lastStage 同理：thinking / working / init 都是过程态，重置为 default 让
+  // PetCharacter 不卡在"思考"立绘
+  const lastStage = tab.lastStage === "thinking" || tab.lastStage === "working" || tab.lastStage === "init"
+    ? "default"
+    : tab.lastStage;
   return {
     ...tab,
-    cliBlocks: [],
-    task: "",
+    cliBlocks: trimmedBlocks,
     percent: 0,
     bubble: "",
     agentStatus: "idle",
     uiState: "idle",
-    hasUnread: false,
+    mode: sanitizedMode,
+    lastStage,
   };
 }
 
@@ -291,7 +328,48 @@ export const useTabsStore = create<TabsStoreState>()(
     {
       name: "galcode_tabs",
       version: 1,
-      storage: createJSONStorage(() => localStorage),
+      // 自定义 storage：撞 localStorage 配额（QuotaExceededError）时不让
+      // zustand 整个写失败 —— 改为逐 tab 把 cliBlocks 砍半重试，确保至少
+      // tab 列表 / 上次结果能存进去。最差情况下完全丢 cliBlocks 也能继续工作。
+      storage: createJSONStorage(() => ({
+        getItem: (k) => localStorage.getItem(k),
+        removeItem: (k) => localStorage.removeItem(k),
+        setItem: (k, v) => {
+          try {
+            localStorage.setItem(k, v);
+            return;
+          } catch (err) {
+            if (!isQuotaError(err)) throw err;
+            console.warn("[tabs] localStorage 配额不足，砍半 cliBlocks 重试");
+          }
+          // 第一次失败：把每个 tab 的 cliBlocks 砍半再写
+          try {
+            const parsed = JSON.parse(v) as { state?: { tabs?: Record<string, TabState> } };
+            if (parsed.state?.tabs) {
+              for (const id of Object.keys(parsed.state.tabs)) {
+                const blocks = parsed.state.tabs[id].cliBlocks ?? [];
+                parsed.state.tabs[id].cliBlocks = blocks.slice(-Math.floor(blocks.length / 2));
+              }
+              localStorage.setItem(k, JSON.stringify(parsed));
+              return;
+            }
+          } catch (e) {
+            console.warn("[tabs] 砍半重试失败", e);
+          }
+          // 第二次失败：彻底丢掉 cliBlocks 兜底
+          try {
+            const parsed = JSON.parse(v) as { state?: { tabs?: Record<string, TabState> } };
+            if (parsed.state?.tabs) {
+              for (const id of Object.keys(parsed.state.tabs)) {
+                parsed.state.tabs[id].cliBlocks = [];
+              }
+              localStorage.setItem(k, JSON.stringify(parsed));
+            }
+          } catch (e) {
+            console.error("[tabs] 持久化彻底失败", e);
+          }
+        },
+      })),
       partialize: (state) =>
         ({
           tabs: Object.fromEntries(
@@ -310,3 +388,9 @@ export const useTabsStore = create<TabsStoreState>()(
     },
   ),
 );
+
+function isQuotaError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  // 不同浏览器报错 name 不一样：QuotaExceededError / NS_ERROR_DOM_QUOTA_REACHED / ...
+  return /quota|exceed/i.test(err.name) || /quota|exceed/i.test(err.message);
+}

@@ -216,6 +216,49 @@ pub fn get_session_logs(
     manager::get_logs(Arc::clone(state.inner()), session_id)
 }
 
+/// 重启后接续翻译+总结：用户在 finalize_session 跑到一半（agent 已完成
+/// 但 LLM 翻译/总结还在跑）退出 app，重启时前端 reattach 检测到 tab.pending*
+/// 字段 → 调这个命令把英文 result_raw + 中文 user_zh 重新喂给 LLM 管线，
+/// 跑完后 emit `agent://session-complete` 让 ResultCard 显示。
+///
+/// 跟 finalize_session 共用 compute_finalize_outcome 核心逻辑，但**不依赖**
+/// mgr.sessions（重启后那是空的）—— 直接用入参 sessionId/runId emit。
+#[tauri::command]
+pub async fn finalize_pending(
+    app: AppHandle,
+    run_id: String,
+    session_id: String,
+    user_zh: String,
+    result_raw: String,
+) -> Result<(), String> {
+    use crate::ipc::events::SessionCompletePayload;
+    use tauri::Emitter;
+
+    let handle = app.clone();
+    let join = tokio::task::spawn_blocking(move || {
+        let llm = crate::llm::load_llm_config();
+        let outcome =
+            crate::agent::manager::compute_finalize_outcome(&user_zh, &result_raw, llm.as_ref());
+
+        let _ = handle.emit(
+            "agent://session-complete",
+            SessionCompletePayload {
+                session_id: session_id.clone(),
+                run_id: Some(run_id),
+                mode: outcome.mode,
+                emotion: outcome.emotion,
+                summary_translation: outcome.summary_translation,
+                result_raw: Some(result_raw),
+                result_zh: Some(outcome.result_zh),
+                suggestion_options: outcome.suggestion_options,
+            },
+        );
+    });
+    join.await
+        .map_err(|e| format!("finalize_pending task failed: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn translate_only(text_zh: String) -> Result<String, String> {
     let cfg = crate::llm::load_llm_config().ok_or_else(|| "未配置 LLM_API_KEY".to_string())?;

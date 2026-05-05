@@ -31,6 +31,8 @@ const EMPTY_TAB: TabState = Object.freeze({
   lastStage: "default",
   cliBlocks: [],
   hasUnread: false,
+  pendingResultRaw: null,
+  pendingUserZh: null,
   createdAt: 0,
 }) as TabState;
 

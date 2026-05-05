@@ -95,6 +95,30 @@ export function useAgentIPC(): void {
         }),
       );
 
+      // agent turn 完成、finalize 开始前后端 emit 这个；前端持久化中间结果，
+      // 防止 finalize 跑到一半用户退出 app 后丢数据。session-complete 收到时
+      // 会清掉 pending 字段表示"已经走完 finalize 了"。
+      unsubs.push(
+        await listen<{
+          sessionId?: string;
+          runId?: string;
+          resultRaw?: string;
+          userZh?: string;
+        }>("agent://result-raw", (e) => {
+          const p = e.payload;
+          const tabId = resolveTabId(p?.runId, p?.sessionId);
+          if (!tabId) {
+            console.warn("[ipc] result-raw dropped, no tab match", p);
+            return;
+          }
+          ensureSessionLinked(tabId, p?.sessionId);
+          useTabsStore.getState().updateTab(tabId, {
+            pendingResultRaw: p?.resultRaw ?? null,
+            pendingUserZh: p?.userZh ?? null,
+          });
+        }),
+      );
+
       unsubs.push(
         await listen<SessionCompletePayload>("agent://session-complete", (e) => {
           const p = e.payload;
@@ -117,6 +141,9 @@ export function useAgentIPC(): void {
             suggestionOptions: p.suggestionOptions ?? [],
             bubble: p.emotion || "任务完成！",
             agentStatus: "idle",
+            // finalize 已经走完，清掉中间结果防止下次启动重复触发 finalize_pending
+            pendingResultRaw: null,
+            pendingUserZh: null,
           });
 
           // 非活动 tab 完成时打未读小红点（D 阶段 TabBar 会显示）

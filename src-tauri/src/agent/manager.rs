@@ -260,6 +260,18 @@ pub fn launch_claude_agent(
                         mgr.remember_session("claude-code", &cwd_owned, &next_sid);
                     }
                 }
+                // 在跑 finalize 之前 emit agent turn 的英文原文，让前端持久化
+                // 备用：用户在翻译/总结过程中退出 app，重启时 reattach 会拿这个
+                // result_raw 调 finalize_pending 自动接续翻译+总结。
+                let _ = app_handle.emit(
+                    "agent://result-raw",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "runId": run_id,
+                        "resultRaw": output_en,
+                        "userZh": user_zh,
+                    }),
+                );
                 emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "翻译输出 + 总结…", 80.0);
                 let t_post_start = std::time::Instant::now();
                 finalize_session(
@@ -399,6 +411,18 @@ pub fn launch_codex_agent(
                 if let Ok(mut mgr) = state_clone.manager.lock() {
                     mgr.remember_session("codex", &cwd_owned, &thread_id);
                 }
+                // 在跑 finalize 之前 emit agent turn 的英文原文，让前端持久化
+                // 备用：用户在翻译/总结过程中退出 app，重启时 reattach 会拿这个
+                // result_raw 调 finalize_pending 自动接续翻译+总结。
+                let _ = app_handle.emit(
+                    "agent://result-raw",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "runId": run_id,
+                        "resultRaw": output_en,
+                        "userZh": user_zh,
+                    }),
+                );
                 emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "翻译输出 + 总结…", 80.0);
                 let t_post_start = std::time::Instant::now();
                 finalize_session(
@@ -597,6 +621,16 @@ pub fn launch_opencode_agent(
                 if let Ok(mut mgr) = state_clone.manager.lock() {
                     mgr.remember_session("opencode", &cwd_owned, &session_for_turn);
                 }
+                // emit agent 英文原文给前端持久化（参见 claude/codex 同处注释）
+                let _ = app_handle.emit(
+                    "agent://result-raw",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "runId": run_id,
+                        "resultRaw": output_en,
+                        "userZh": user_zh,
+                    }),
+                );
                 emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Processing, "翻译输出 + 总结…", 80.0);
                 let t_post_start = std::time::Instant::now();
                 let app_for_finalize = app_handle.clone();
@@ -660,33 +694,35 @@ fn translate_input(llm: &Option<LlmConfig>, zh: &str) -> String {
     }
 }
 
-/// 处理 backend turn 的成功结果：英→中翻译 + LLM summary + emit complete + 状态归位。
-fn finalize_session(
-    app: &AppHandle,
-    state: &Arc<AppState>,
-    session_id: &str,
-    user_zh: &str,
-    result_en: String,
-    llm: Option<&LlmConfig>,
-) {
-    let (snapshot, run_id) = match state.manager.lock() {
-        Ok(mgr) => mgr
-            .sessions
-            .get(session_id)
-            .map(|s| (Some(Arc::clone(&s.snapshot)), Some(s.run_id.clone())))
-            .unwrap_or((None, None)),
-        Err(_) => (None, None),
-    };
+/// 翻译 + 总结的核心计算（纯函数，不动 state / 不 emit）。
+/// 拿英文原文 + 用户中文 prompt + LLM 配置，跑并发翻译 + 总结，输出
+/// session-complete payload 所需的全部字段。
+///
+/// 设计上不依赖 mgr.sessions —— 这样 `finalize_pending` IPC 命令在重启
+/// 后（mgr.sessions 是空的）也能用同一份逻辑跑"接续翻译+总结"。
+pub(crate) struct FinalizeOutcome {
+    pub mode: Option<String>,
+    pub emotion: Option<String>,
+    pub summary_translation: Option<String>,
+    pub result_zh: String,
+    pub suggestion_options: Option<Vec<String>>,
+}
 
+pub(crate) fn compute_finalize_outcome(
+    user_zh: &str,
+    result_en: &str,
+    llm: Option<&LlmConfig>,
+) -> FinalizeOutcome {
     // 翻译输出 + 生成 summary 并发——summary 不需要等翻译完成的中文，直接吃英文
     // 也能正确理解（DeepSeek 跨语言无压力）。串行约 5-15s 改并发后取 max(两者)。
     let (result_zh, summary_result) = match llm {
         Some(cfg) => {
             let cfg_translate = cfg.clone();
             let cfg_summary = cfg.clone();
-            let result_for_translate = result_en.clone();
-            let result_for_summary = result_en.clone();
+            let result_for_translate = result_en.to_string();
+            let result_for_summary = result_en.to_string();
             let user_zh_owned = user_zh.to_string();
+            let result_en_fallback = result_en.to_string();
 
             let t_parallel = std::time::Instant::now();
             let h_translate = std::thread::spawn(move || {
@@ -700,7 +736,7 @@ fn finalize_session(
                 .join()
                 .ok()
                 .and_then(|r| r.ok())
-                .unwrap_or_else(|| result_en.clone());
+                .unwrap_or(result_en_fallback);
             let summary = h_summary.join().ok().and_then(|r| match r {
                 Ok(s) => Some(Ok(s)),
                 Err(e) => Some(Err(e)),
@@ -711,7 +747,7 @@ fn finalize_session(
             );
             (translated, summary)
         }
-        None => (result_en.clone(), None),
+        None => (result_en.to_string(), None),
     };
 
     let (mode, emotion, summary, suggestion_options) = match summary_result {
@@ -741,6 +777,42 @@ fn finalize_session(
         }
     };
 
+    FinalizeOutcome {
+        mode,
+        emotion,
+        summary_translation: summary,
+        result_zh,
+        suggestion_options,
+    }
+}
+
+/// 处理 backend turn 的成功结果：英→中翻译 + LLM summary + emit complete + 状态归位。
+fn finalize_session(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    session_id: &str,
+    user_zh: &str,
+    result_en: String,
+    llm: Option<&LlmConfig>,
+) {
+    let (snapshot, run_id) = match state.manager.lock() {
+        Ok(mgr) => mgr
+            .sessions
+            .get(session_id)
+            .map(|s| (Some(Arc::clone(&s.snapshot)), Some(s.run_id.clone())))
+            .unwrap_or((None, None)),
+        Err(_) => (None, None),
+    };
+
+    let outcome = compute_finalize_outcome(user_zh, &result_en, llm);
+    let FinalizeOutcome {
+        mode,
+        emotion,
+        summary_translation,
+        result_zh,
+        suggestion_options,
+    } = outcome;
+
     if let Some(snap) = snapshot {
         if let Ok(mut s) = snap.lock() {
             s.status = match mode.as_deref() {
@@ -758,7 +830,7 @@ fn finalize_session(
             run_id: run_id.clone(),
             mode: mode.clone(),
             emotion: emotion.clone(),
-            summary_translation: summary.clone(),
+            summary_translation: summary_translation.clone(),
             result_raw: Some(result_en.clone()),
             result_zh: Some(result_zh.clone()),
             suggestion_options: suggestion_options.clone(),

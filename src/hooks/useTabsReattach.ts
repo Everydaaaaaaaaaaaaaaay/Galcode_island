@@ -62,12 +62,57 @@ export function useTabsReattach(): void {
       if (cancelled) return;
 
       reconcileWithBackendSessions(sessions);
+      resumePendingFinalize();
     };
     void run();
     return () => {
       cancelled = true;
     };
   }, []);
+}
+
+/// 中途退出导致 finalize 没跑完的 tab：上次 agent turn 已完成（result_raw 已存），
+/// 但翻译+总结管线没走完就退出。重启后调 finalize_pending 后端 IPC 重新跑
+/// 翻译+总结，跑完会 emit session-complete 回写 ResultCard。
+function resumePendingFinalize(): void {
+  const { tabs, updateTab } = useTabsStore.getState();
+  for (const id of Object.keys(tabs)) {
+    const tab = tabs[id];
+    if (!tab.pendingResultRaw || !tab.pendingUserZh) continue;
+    // 双保险：上次已经走完 finalize（summary/emotion 已存）就不重跑；
+    // 正常路径 session-complete 会清 pending 字段，这里只是兜底
+    if (tab.summaryTranslation || tab.emotionText) continue;
+
+    console.log("[reattach] resume pending finalize for tab", id);
+    // 切到 running 状态让 RunningBubble 显示"重新生成总结"，避免界面卡 idle
+    updateTab(id, {
+      uiState: "running",
+      agentStatus: "running",
+      mode: "working",
+      bubble: "重新生成总结…",
+      percent: 80,
+    });
+
+    void invoke("finalize_pending", {
+      runId: id,
+      sessionId: tab.sessionId ?? "",
+      userZh: tab.pendingUserZh,
+      resultRaw: tab.pendingResultRaw,
+    }).catch((err) => {
+      useAppStore.getState().addLogEntry({
+        timestamp: Date.now(),
+        level: "error",
+        message: `finalize_pending failed for tab ${id}: ${String(err)}`,
+      });
+      // 失败兜底：让 tab 回到 idle，pending 字段保留下次启动还能再试
+      useTabsStore.getState().updateTab(id, {
+        uiState: "idle",
+        agentStatus: "idle",
+        bubble: "",
+        percent: 0,
+      });
+    });
+  }
 }
 
 function resetAllTabsToIdle(): void {
