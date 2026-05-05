@@ -5,6 +5,8 @@ import { GlobalTopBar } from "./components/GlobalTopBar";
 import { MainView } from "./components/MainView";
 import { WelcomeView } from "./components/welcome/WelcomeView";
 import { SettingsModal } from "./components/settings/SettingsModal";
+import { SidebarLeft } from "./components/sidebar/SidebarLeft";
+import { SidebarRight } from "./components/sidebar/SidebarRight";
 import { useAgentIPC } from "./hooks/useAgentIPC";
 import { useCliStream } from "./hooks/useCliStream";
 import { useTabsReattach } from "./hooks/useTabsReattach";
@@ -47,8 +49,20 @@ function App(): JSX.Element {
     }
   }, []);
 
+  // 三栏布局：isStarted=true 时左栏 SidebarLeft + 中栏 MainView + 右栏 SidebarRight
+  // （右栏按 useUiStore.detailBlock 决定开合）；isStarted=false 时只显示 WelcomeView
+  // 占满整个内容区，左右栏不渲染（用户还没开始项目）。
   const currentScreen = useMemo(() => {
-    return isStarted ? <MainView /> : <WelcomeView />;
+    if (!isStarted) return <WelcomeView />;
+    return (
+      <div className="flex h-full w-full">
+        <SidebarLeft />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <MainView />
+        </div>
+        <SidebarRight />
+      </div>
+    );
   }, [isStarted]);
 
   return (

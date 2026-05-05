@@ -37,6 +37,8 @@ export function ResultCard(): JSX.Element {
       uiState: "running",
       mode: "working",
       agentStatus: "running",
+      lastUserPrompt: opt.slice(0, 80),
+      lastActiveAt: Date.now(),
     });
 
     try {

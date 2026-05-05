@@ -16,7 +16,15 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useActiveTabField, useActiveTabId } from "../../hooks/useActiveTab";
+import { useUiStore } from "../../stores/useUiStore";
 import type { CliBlock } from "../../types/blocks";
+
+/// 哪些类型的块"打开右栏看详情更划算"——长 output / 大 diff / 多行 stderr 等。
+/// 这些类型在中栏渲染时缩略，整块可点击 → 右栏展开完整内容。
+const DETAIL_TYPES: ReadonlySet<CliBlock["type"]> = new Set(["command", "diff", "stderr"]);
+function shouldOpenDetailOnClick(type: CliBlock["type"]): boolean {
+  return DETAIL_TYPES.has(type);
+}
 
 /// Markdown 渲染——Agent 输出常含 **bold** / `code` / 代码块 / 列表 / 表格 / 链接。
 /// 流式中可能 markdown 不闭合（比如 ``` 还没收尾），react-markdown 会自动容错降级。
@@ -136,15 +144,20 @@ function CommandBlock({ block }: { block: CliBlock }): JSX.Element {
   const badge = statusBadge(block.status);
   const cmd = block.command?.trim() || "(command)";
   const output = block.output?.trim();
+  // 中栏缩略形态：output 只露 1-2 行，整块可点击让右栏展开看完整 output
+  const previewOutput = output ? output.split("\n").slice(0, 2).join("\n") : "";
+  const hasMore = output ? output.split("\n").length > 2 : false;
   return (
     <div className="overflow-hidden rounded-md border border-zinc-700/30 bg-zinc-900/95 font-mono text-[11px] leading-relaxed text-zinc-200 dark:border-zinc-600/30">
       <div className="flex items-center gap-2 border-b border-zinc-700/30 px-2 py-1 dark:border-zinc-600/30">
         <span className={badge.cls}>{badge.label}</span>
         <span className="truncate">$ {cmd}</span>
+        {hasMore && <span className="ml-auto shrink-0 text-[10px] text-zinc-500">点击查看完整输出</span>}
       </div>
-      {output ? (
-        <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-all px-2 py-1 text-zinc-400">
-          {output}
+      {previewOutput ? (
+        <pre className="max-h-12 overflow-hidden whitespace-pre-wrap break-all px-2 py-1 text-zinc-400">
+          {previewOutput}
+          {hasMore && "…"}
         </pre>
       ) : null}
     </div>
@@ -228,8 +241,9 @@ function DiffBlock({ block }: { block: CliBlock }): JSX.Element {
         </span>
         <span className="shrink-0 text-[10px] text-zinc-400">{summary}</span>
       </div>
-      <pre className="max-h-44 overflow-y-auto whitespace-pre-wrap break-all">
-        {lines.map((line, i) => {
+      {/* 中栏缩略：只渲染前 6 行 diff，更多行右栏完整查看 */}
+      <pre className="max-h-24 overflow-hidden whitespace-pre-wrap break-all">
+        {lines.slice(0, 6).map((line, i) => {
           let cls = "text-zinc-400";
           if (line.startsWith("+")) cls = "bg-emerald-500/10 text-emerald-300";
           else if (line.startsWith("-")) cls = "bg-rose-500/10 text-rose-300";
@@ -240,6 +254,11 @@ function DiffBlock({ block }: { block: CliBlock }): JSX.Element {
             </div>
           );
         })}
+        {lines.length > 6 && (
+          <div className="px-2 text-[10px] text-zinc-500">
+            … 还有 {lines.length - 6} 行，点击查看完整 diff
+          </div>
+        )}
       </pre>
     </div>
   );
@@ -326,6 +345,8 @@ function BlockRenderer({ block }: { block: CliBlock }): JSX.Element | null {
 export function BlockStream(): JSX.Element | null {
   const blocks = useActiveTabField("cliBlocks");
   const activeTabId = useActiveTabId();
+  const setDetailBlock = useUiStore((s) => s.setDetailBlock);
+  const detailBlockId = useUiStore((s) => s.detailBlock?.id ?? null);
 
   if (blocks.length === 0) return null;
 
@@ -337,11 +358,26 @@ export function BlockStream(): JSX.Element | null {
       key={activeTabId ?? "no-tab"}
       className="flex h-full flex-col gap-2 overflow-y-auto px-1 py-1 text-xs leading-relaxed"
     >
-      {blocks.map((block) => (
-        <div key={block.id}>
-          <BlockRenderer block={block} />
-        </div>
-      ))}
+      {blocks.map((block) => {
+        const clickable = shouldOpenDetailOnClick(block.type);
+        const isOpenInRight = detailBlockId === block.id;
+        return (
+          <div
+            key={block.id}
+            onClick={clickable ? () => setDetailBlock(block) : undefined}
+            className={
+              clickable
+                ? `cursor-pointer transition-all hover:translate-x-0.5 ${
+                    isOpenInRight ? "ring-1 ring-sky-400/50 rounded-md" : ""
+                  }`
+                : ""
+            }
+            title={clickable ? "点击在右栏查看完整内容" : undefined}
+          >
+            <BlockRenderer block={block} />
+          </div>
+        );
+      })}
     </div>
   );
 }

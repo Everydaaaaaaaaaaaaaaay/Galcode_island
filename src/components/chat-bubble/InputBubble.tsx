@@ -67,6 +67,8 @@ export function InputBubble(): JSX.Element {
         summaryTranslation: "",
         emotionText: "",
         suggestionOptions: [],
+        lastUserPrompt: task.trim().slice(0, 80),
+        lastActiveAt: Date.now(),
       });
 
       const res = await invoke<{ sessionId?: string }>("start_agent", {

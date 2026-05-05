@@ -34,6 +34,8 @@ const EMPTY_TAB: TabState = Object.freeze({
   pendingResultRaw: null,
   pendingUserZh: null,
   createdAt: 0,
+  lastActiveAt: 0,
+  lastUserPrompt: null,
 }) as TabState;
 
 export function useActiveTabId(): string | null {

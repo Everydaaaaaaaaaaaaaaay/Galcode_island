@@ -69,6 +69,12 @@ export interface TabState {
   pendingUserZh: string | null;
   /// 创建时间戳，用来排序 / 关闭时回退到上一个
   createdAt: number;
+  /// 最后活跃时间（毫秒）：每次有 IPC 事件 / 用户启动 / 流式 block 写入都刷新；
+  /// 左栏项目卡按这个排序，让"刚动过的"项目浮上来。
+  lastActiveAt: number;
+  /// 最近一次启动用的中文 prompt（截断），左栏项目卡作为摘要标题展示。
+  /// 没启动过的 tab 为 null —— 显示 fallback "新会话"或 projectPath basename。
+  lastUserPrompt: string | null;
 }
 
 interface TabsStoreState {
@@ -138,6 +144,8 @@ function makeDefaultTab(init?: Partial<TabState>): TabState {
     cliBlocks: init?.cliBlocks ?? [],
     hasUnread: init?.hasUnread ?? false,
     createdAt: 0,
+    lastActiveAt: init?.lastActiveAt ?? 0,
+    lastUserPrompt: init?.lastUserPrompt ?? null,
   };
 }
 
@@ -203,10 +211,12 @@ export const useTabsStore = create<TabsStoreState>()(
       return requestedId;
     }
     const id = requestedId ?? generateTabId();
+    const now = Date.now();
     const tab: TabState = {
       ...makeDefaultTab(init),
       id,
-      createdAt: Date.now(),
+      createdAt: now,
+      lastActiveAt: init?.lastActiveAt ?? now,
     };
     set((state) => ({
       tabs: { ...state.tabs, [id]: tab },
@@ -286,7 +296,12 @@ export const useTabsStore = create<TabsStoreState>()(
       if (!tab) return state;
       const next = [...tab.cliBlocks, block];
       const trimmed = next.length > MAX_BLOCKS ? next.slice(-TRIM_TARGET) : next;
-      return { tabs: { ...state.tabs, [id]: { ...tab, cliBlocks: trimmed } } };
+      return {
+        tabs: {
+          ...state.tabs,
+          [id]: { ...tab, cliBlocks: trimmed, lastActiveAt: Date.now() },
+        },
+      };
     });
   },
 
@@ -303,7 +318,12 @@ export const useTabsStore = create<TabsStoreState>()(
         next = [...tab.cliBlocks, block];
       }
       const trimmed = next.length > MAX_BLOCKS ? next.slice(-TRIM_TARGET) : next;
-      return { tabs: { ...state.tabs, [id]: { ...tab, cliBlocks: trimmed } } };
+      return {
+        tabs: {
+          ...state.tabs,
+          [id]: { ...tab, cliBlocks: trimmed, lastActiveAt: Date.now() },
+        },
+      };
     });
   },
 

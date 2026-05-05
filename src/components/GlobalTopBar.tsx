@@ -2,9 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import type { MouseEvent } from "react";
 import { useAppStore } from "../stores/useAppStore";
-import { useSettingsStore } from "../stores/useSettingsStore";
 import { useActiveTab, useActiveTabActions } from "../hooks/useActiveTab";
-import { TabBar } from "./TabBar";
 
 /// macOS 上启用了原生 traffic lights（左上红绿灯）负责 关窗/最小化/最大化，
 /// 自画的 −/□/× 三连按钮在 mac 上隐藏避免重复；其他平台 borderless 仍需自画。
@@ -14,9 +12,7 @@ const isMacOS = typeof navigator !== "undefined"
 export function GlobalTopBar(): JSX.Element {
   const theme = useAppStore((s) => s.theme);
   const toggleTheme = useAppStore((s) => s.toggleTheme);
-  const isStarted = useAppStore((s) => s.isStarted);
   const addLogEntry = useAppStore((s) => s.addLogEntry);
-  const openSettingsModal = useSettingsStore((s) => s.openSettingsModal);
   const tab = useActiveTab();
   const { activeTabId, reset } = useActiveTabActions();
   const uiState = tab.uiState;
@@ -47,27 +43,22 @@ export function GlobalTopBar(): JSX.Element {
 
   return (
     <header className="absolute top-0 left-0 z-[100] flex h-10 w-full items-center gap-2 px-3 pt-1">
-      {/* 左侧固定的 drag 把手（mac 红绿灯位置预留 + 拖动手感） */}
+      {/* 左侧 drag 把手（mac 红绿灯位置预留）：三栏布局下 TabBar 已搬到左栏 ProjectTree，
+          顶栏只剩窗口控制 + 停止 + 主题 —— 中段 flex-1 全部留给 drag。 */}
       <div
         data-tauri-drag-region
         onMouseDown={(event) => { void handleDragMouseDown(event); }}
         className="h-full w-16 shrink-0"
       />
 
-      {/* TabBar 占据中部大部分空间 —— 仅在主界面显示 */}
-      {isStarted ? (
-        <div className="flex min-w-0 flex-1 items-center">
-          <TabBar />
-        </div>
-      ) : (
-        <div
-          data-tauri-drag-region
-          onMouseDown={(event) => { void handleDragMouseDown(event); }}
-          className="h-full flex-1"
-        />
-      )}
+      {/* 中段也是 drag */}
+      <div
+        data-tauri-drag-region
+        onMouseDown={(event) => { void handleDragMouseDown(event); }}
+        className="h-full flex-1"
+      />
 
-      <div className="flex items-center gap-3 pr-1">
+      <div className="flex items-center gap-2 pr-1">
         {uiState === "running" ? (
           <button
             type="button"
@@ -77,18 +68,6 @@ export function GlobalTopBar(): JSX.Element {
             停止
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={openSettingsModal}
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/10 text-zinc-600 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/20 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/20"
-          aria-label="设置"
-          title="设置"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <circle cx="12" cy="12" r="3" />
-          </svg>
-        </button>
         <button
           type="button"
           onClick={toggleTheme}
@@ -108,8 +87,7 @@ export function GlobalTopBar(): JSX.Element {
           )}
         </button>
         {/* macOS 下原生 traffic lights 已覆盖最小化/最大化/关闭，自画的三连
-            按钮隐藏避免重复（保留 设置/主题/停止 这些 traffic lights 没有
-            的功能按钮）。其他平台 borderless 仍需自画窗口控制。 */}
+            按钮隐藏避免重复。其他平台 borderless 仍需自画窗口控制。 */}
         {!isMacOS && (
           <>
             <button
