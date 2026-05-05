@@ -7,8 +7,10 @@ import { SettingsModal } from "./components/settings/SettingsModal";
 import { ProfileModal } from "./components/profile/ProfileModal";
 import { SidebarLeft } from "./components/sidebar/SidebarLeft";
 import { SidebarRight } from "./components/sidebar/SidebarRight";
+import { InPageSearch } from "./components/InPageSearch";
 import { useAgentIPC } from "./hooks/useAgentIPC";
 import { useCliStream } from "./hooks/useCliStream";
+import { useInPageSearchHotkey } from "./hooks/useInPageSearchHotkey";
 import { useTabsReattach } from "./hooks/useTabsReattach";
 import { useThemeHotkey } from "./hooks/useThemeHotkey";
 import { useAppStore } from "./stores/useAppStore";
@@ -22,6 +24,7 @@ function App(): JSX.Element {
   useAgentIPC();
   useCliStream();
   useTabsReattach();
+  useInPageSearchHotkey();
 
   useEffect(() => {
     const state = useSettingsStore.getState();
@@ -58,12 +61,14 @@ function App(): JSX.Element {
   const currentScreen = useMemo(() => {
     if (!isStarted) return <WelcomeView />;
     return (
-      <div className="flex h-full w-full">
+      <div className="relative flex h-full w-full">
         <SidebarLeft />
         <div className="flex min-w-0 flex-1 flex-col">
           <MainView />
         </div>
         <SidebarRight />
+        {/* cmd+f 触发的页内搜索浮窗：只在主界面挂，绝对定位浮在右上角 */}
+        <InPageSearch />
       </div>
     );
   }, [isStarted]);

@@ -15,9 +15,18 @@
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useEffect, useRef } from "react";
 import { useActiveTabField, useActiveTabId } from "../../hooks/useActiveTab";
-import { useUiStore } from "../../stores/useUiStore";
+import { useUiStore, type ActiveMatch } from "../../stores/useUiStore";
 import type { CliBlock } from "../../types/blocks";
+import { countOccurrences, highlightText } from "./highlight";
+
+/// 子组件公共的高亮上下文 prop —— 没 query 时所有子组件渲染行为退化为原状。
+interface HighlightCtx {
+  query: string;
+  activeMatch: ActiveMatch | null;
+}
+const NO_HIGHLIGHT: HighlightCtx = { query: "", activeMatch: null };
 
 /// 哪些类型的块"打开右栏看详情更划算"——长 output / 大 diff / 多行 stderr 等。
 /// 这些类型在中栏渲染时缩略，整块可点击 → 右栏展开完整内容。
@@ -122,17 +131,34 @@ function statusBadge(status?: string): { label: string; cls: string } {
   }
 }
 
-function TextBlock({ block }: { block: CliBlock }): JSX.Element | null {
+function TextBlock({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element | null {
   const content = block.content?.trim();
   if (!content) return null;
   const accent =
     block.tone === "file" ? "text-sky-700 dark:text-sky-300" : "text-zinc-800 dark:text-zinc-100";
+  // 搜索激活时退化为纯文本 + 高亮 mark；无搜索时正常 markdown
+  if (hl.query.trim()) {
+    return (
+      <div className={`whitespace-pre-wrap text-xs leading-relaxed ${accent}`}>
+        {highlightText(content, hl.query, block.id, "content", hl.activeMatch)}
+      </div>
+    );
+  }
   return <MarkdownText content={content} className={accent} />;
 }
 
-function ThoughtBlock({ block }: { block: CliBlock }): JSX.Element | null {
+function ThoughtBlock({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element | null {
   const content = block.content?.trim();
   if (!content) return null;
+  if (hl.query.trim()) {
+    return (
+      <div className="rounded-md border-l-2 border-zinc-300 bg-zinc-100/40 px-2 py-1 text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/30 dark:text-zinc-400">
+        <div className="whitespace-pre-wrap text-xs leading-relaxed">
+          {highlightText(content, hl.query, block.id, "content", hl.activeMatch)}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="rounded-md border-l-2 border-zinc-300 bg-zinc-100/40 px-2 py-1 text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/30 dark:text-zinc-400">
       <MarkdownText content={content} className="text-zinc-500 dark:text-zinc-400" />
@@ -140,7 +166,7 @@ function ThoughtBlock({ block }: { block: CliBlock }): JSX.Element | null {
   );
 }
 
-function CommandBlock({ block }: { block: CliBlock }): JSX.Element {
+function CommandBlock({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element {
   const badge = statusBadge(block.status);
   const cmd = block.command?.trim() || "(command)";
   const output = block.output?.trim();
@@ -151,12 +177,12 @@ function CommandBlock({ block }: { block: CliBlock }): JSX.Element {
     <div className="overflow-hidden rounded-md border border-zinc-700/30 bg-zinc-900/95 font-mono text-[11px] leading-relaxed text-zinc-200 dark:border-zinc-600/30">
       <div className="flex items-center gap-2 border-b border-zinc-700/30 px-2 py-1 dark:border-zinc-600/30">
         <span className={badge.cls}>{badge.label}</span>
-        <span className="truncate">$ {cmd}</span>
+        <span className="truncate">$ {highlightText(cmd, hl.query, block.id, "command", hl.activeMatch)}</span>
         {hasMore && <span className="ml-auto shrink-0 text-[10px] text-zinc-500">点击查看完整输出</span>}
       </div>
       {previewOutput ? (
         <pre className="max-h-12 overflow-hidden whitespace-pre-wrap break-all px-2 py-1 text-zinc-400">
-          {previewOutput}
+          {highlightText(previewOutput, hl.query, block.id, "output", hl.activeMatch)}
           {hasMore && "…"}
         </pre>
       ) : null}
@@ -164,13 +190,13 @@ function CommandBlock({ block }: { block: CliBlock }): JSX.Element {
   );
 }
 
-function TodoBlock({ block }: { block: CliBlock }): JSX.Element | null {
+function TodoBlock({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element | null {
   const items = block.items ?? [];
   if (items.length === 0) return null;
   return (
     <div className="rounded-md border border-amber-300/40 bg-amber-50/60 p-2 text-xs dark:border-amber-400/30 dark:bg-amber-400/5">
       <div className="mb-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
-        {block.title || "Todo"}
+        {highlightText(block.title || "Todo", hl.query, block.id, "title", hl.activeMatch)}
       </div>
       <ul className="flex flex-col gap-0.5">
         {items.map((item) => {
@@ -187,13 +213,15 @@ function TodoBlock({ block }: { block: CliBlock }): JSX.Element | null {
   );
 }
 
-function ConfirmBlock({ block }: { block: CliBlock }): JSX.Element {
+function ConfirmBlock({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element {
   return (
     <div className="rounded-md border border-amber-400/50 bg-amber-50/70 px-2 py-1.5 text-xs dark:border-amber-300/40 dark:bg-amber-400/10">
-      <div className="font-semibold text-amber-700 dark:text-amber-300">{block.title || "需要确认"}</div>
+      <div className="font-semibold text-amber-700 dark:text-amber-300">
+        {highlightText(block.title || "需要确认", hl.query, block.id, "title", hl.activeMatch)}
+      </div>
       {block.content ? (
         <div className="mt-0.5 whitespace-pre-wrap text-zinc-700 dark:text-zinc-200">
-          {block.content}
+          {highlightText(block.content, hl.query, block.id, "content", hl.activeMatch)}
         </div>
       ) : null}
       {block.note ? (
@@ -203,26 +231,35 @@ function ConfirmBlock({ block }: { block: CliBlock }): JSX.Element {
   );
 }
 
-function ToolBlock({ block }: { block: CliBlock }): JSX.Element {
+function ToolBlock({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element {
   const badge = statusBadge(block.status);
   return (
     <div className="flex items-center gap-2 rounded-md bg-zinc-100/50 px-2 py-1 text-[11px] dark:bg-zinc-800/40">
       <span className={badge.cls}>{badge.label}</span>
-      <span className="font-medium text-zinc-700 dark:text-zinc-200">{block.tool || "tool"}</span>
+      <span className="font-medium text-zinc-700 dark:text-zinc-200">
+        {highlightText(block.tool || "tool", hl.query, block.id, "tool", hl.activeMatch)}
+      </span>
       {block.detail ? (
-        <span className="truncate text-zinc-500 dark:text-zinc-400">{block.detail}</span>
+        <span className="truncate text-zinc-500 dark:text-zinc-400">
+          {highlightText(block.detail, hl.query, block.id, "detail", hl.activeMatch)}
+        </span>
       ) : null}
       {block.message ? (
-        <span className="truncate text-rose-600 dark:text-rose-400">{block.message}</span>
+        <span className="truncate text-rose-600 dark:text-rose-400">
+          {highlightText(block.message, hl.query, block.id, "message", hl.activeMatch)}
+        </span>
       ) : null}
     </div>
   );
 }
 
-function DiffBlock({ block }: { block: CliBlock }): JSX.Element {
+function DiffBlock({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element {
   const path = block.path?.trim() || "(unknown file)";
   const tool = block.tool?.trim() || "Edit";
   const lines = (block.diff ?? "").split("\n");
+  // 累计 occurrence offset：每行调 highlightText 时把这之前已出现的次数传入，
+  // 让单行渲染的 occ 跟整段 diff 字符串里数到的 occ 对齐 active 那一段。
+  let diffOcc = 0;
   const summary = (() => {
     let added = 0;
     let removed = 0;
@@ -236,8 +273,12 @@ function DiffBlock({ block }: { block: CliBlock }): JSX.Element {
     <div className="overflow-hidden rounded-md border border-zinc-700/30 bg-zinc-900/95 font-mono text-[11px] leading-relaxed">
       <div className="flex items-center justify-between border-b border-zinc-700/30 px-2 py-1 text-zinc-300">
         <span className="flex items-center gap-2 truncate">
-          <span className="text-amber-300">{tool}</span>
-          <span className="truncate text-sky-300">{path}</span>
+          <span className="text-amber-300">
+            {highlightText(tool, hl.query, block.id, "tool", hl.activeMatch)}
+          </span>
+          <span className="truncate text-sky-300">
+            {highlightText(path, hl.query, block.id, "path", hl.activeMatch)}
+          </span>
         </span>
         <span className="shrink-0 text-[10px] text-zinc-400">{summary}</span>
       </div>
@@ -248,9 +289,18 @@ function DiffBlock({ block }: { block: CliBlock }): JSX.Element {
           if (line.startsWith("+")) cls = "bg-emerald-500/10 text-emerald-300";
           else if (line.startsWith("-")) cls = "bg-rose-500/10 text-rose-300";
           else if (line.startsWith("@@")) cls = "text-amber-300";
+          const node = highlightText(
+            line || " ",
+            hl.query,
+            block.id,
+            "diff",
+            hl.activeMatch,
+            diffOcc,
+          );
+          diffOcc += countOccurrences(line, hl.query);
           return (
             <div key={i} className={`px-2 ${cls}`}>
-              {line || " "}
+              {node}
             </div>
           );
         })}
@@ -264,7 +314,7 @@ function DiffBlock({ block }: { block: CliBlock }): JSX.Element {
   );
 }
 
-function StderrBlock({ block }: { block: CliBlock }): JSX.Element | null {
+function StderrBlock({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element | null {
   const msg = block.message?.trim();
   if (!msg) return null;
   // 启发式：含 error/failed/panic 时染红，否则灰（多数是 warning / debug）
@@ -277,66 +327,72 @@ function StderrBlock({ block }: { block: CliBlock }): JSX.Element | null {
       className={`flex items-start gap-1.5 rounded-md border-l-2 px-2 py-1 font-mono text-[11px] leading-relaxed ${cls}`}
     >
       <span className="shrink-0 opacity-60">stderr</span>
-      <span className="break-all">{msg}</span>
+      <span className="break-all">{highlightText(msg, hl.query, block.id, "message", hl.activeMatch)}</span>
     </div>
   );
 }
 
-function FileBlock({ block }: { block: CliBlock }): JSX.Element {
+function FileBlock({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element {
   const badge = statusBadge(block.status);
   return (
     <div className="flex items-center gap-2 rounded-md border-l-2 border-sky-400/50 bg-sky-50/40 px-2 py-1 text-[11px] dark:border-sky-300/30 dark:bg-sky-400/5">
       <span className={badge.cls}>{badge.label}</span>
-      <span className="font-medium text-zinc-700 dark:text-zinc-200">{block.tool || "file"}</span>
+      <span className="font-medium text-zinc-700 dark:text-zinc-200">
+        {highlightText(block.tool || "file", hl.query, block.id, "tool", hl.activeMatch)}
+      </span>
       {block.path ? (
-        <span className="truncate font-mono text-sky-700 dark:text-sky-300">{block.path}</span>
+        <span className="truncate font-mono text-sky-700 dark:text-sky-300">
+          {highlightText(block.path, hl.query, block.id, "path", hl.activeMatch)}
+        </span>
       ) : null}
     </div>
   );
 }
 
-function StatusLine({ block }: { block: CliBlock }): JSX.Element | null {
+function StatusLine({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element | null {
   const msg = block.message?.trim();
   if (!msg) return null;
   return (
-    <div className="text-[11px] italic text-zinc-500 dark:text-zinc-400">{msg}</div>
-  );
-}
-
-function ErrorLine({ block }: { block: CliBlock }): JSX.Element | null {
-  const msg = block.message?.trim();
-  if (!msg) return null;
-  return (
-    <div className="rounded-md border border-rose-400/40 bg-rose-50/60 px-2 py-1 text-[11px] text-rose-700 dark:border-rose-300/30 dark:bg-rose-400/10 dark:text-rose-300">
-      {msg}
+    <div className="text-[11px] italic text-zinc-500 dark:text-zinc-400">
+      {highlightText(msg, hl.query, block.id, "message", hl.activeMatch)}
     </div>
   );
 }
 
-function BlockRenderer({ block }: { block: CliBlock }): JSX.Element | null {
+function ErrorLine({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element | null {
+  const msg = block.message?.trim();
+  if (!msg) return null;
+  return (
+    <div className="rounded-md border border-rose-400/40 bg-rose-50/60 px-2 py-1 text-[11px] text-rose-700 dark:border-rose-300/30 dark:bg-rose-400/10 dark:text-rose-300">
+      {highlightText(msg, hl.query, block.id, "message", hl.activeMatch)}
+    </div>
+  );
+}
+
+function BlockRenderer({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element | null {
   switch (block.type) {
     case "text":
-      return <TextBlock block={block} />;
+      return <TextBlock block={block} hl={hl} />;
     case "thought":
-      return <ThoughtBlock block={block} />;
+      return <ThoughtBlock block={block} hl={hl} />;
     case "command":
-      return <CommandBlock block={block} />;
+      return <CommandBlock block={block} hl={hl} />;
     case "todo":
-      return <TodoBlock block={block} />;
+      return <TodoBlock block={block} hl={hl} />;
     case "confirm":
-      return <ConfirmBlock block={block} />;
+      return <ConfirmBlock block={block} hl={hl} />;
     case "tool":
-      return <ToolBlock block={block} />;
+      return <ToolBlock block={block} hl={hl} />;
     case "file":
-      return <FileBlock block={block} />;
+      return <FileBlock block={block} hl={hl} />;
     case "diff":
-      return <DiffBlock block={block} />;
+      return <DiffBlock block={block} hl={hl} />;
     case "status":
-      return <StatusLine block={block} />;
+      return <StatusLine block={block} hl={hl} />;
     case "error":
-      return <ErrorLine block={block} />;
+      return <ErrorLine block={block} hl={hl} />;
     case "stderr":
-      return <StderrBlock block={block} />;
+      return <StderrBlock block={block} hl={hl} />;
     default:
       return null;
   }
@@ -347,6 +403,21 @@ export function BlockStream(): JSX.Element | null {
   const activeTabId = useActiveTabId();
   const setDetailBlock = useUiStore((s) => s.setDetailBlock);
   const detailBlockId = useUiStore((s) => s.detailBlock?.id ?? null);
+  const searchQuery = useUiStore((s) => s.searchQuery);
+  const activeMatch = useUiStore((s) => s.activeMatch);
+
+  const hl: HighlightCtx = searchQuery ? { query: searchQuery, activeMatch } : NO_HIGHLIGHT;
+
+  // 每个 block 的 wrapper ref，用于 cmd+f 命中时 scrollIntoView
+  const refs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  useEffect(() => {
+    if (!activeMatch) return;
+    const node = refs.current[activeMatch.blockId];
+    if (node) {
+      node.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [activeMatch]);
 
   if (blocks.length === 0) return null;
 
@@ -361,20 +432,23 @@ export function BlockStream(): JSX.Element | null {
       {blocks.map((block) => {
         const clickable = shouldOpenDetailOnClick(block.type);
         const isOpenInRight = detailBlockId === block.id;
+        const wrapperCls = [
+          clickable ? "cursor-pointer transition-all hover:translate-x-0.5" : "",
+          isOpenInRight ? "ring-1 ring-sky-400/50 rounded-md" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
         return (
           <div
             key={block.id}
+            ref={(el) => {
+              refs.current[block.id] = el;
+            }}
             onClick={clickable ? () => setDetailBlock(block) : undefined}
-            className={
-              clickable
-                ? `cursor-pointer transition-all hover:translate-x-0.5 ${
-                    isOpenInRight ? "ring-1 ring-sky-400/50 rounded-md" : ""
-                  }`
-                : ""
-            }
+            className={wrapperCls}
             title={clickable ? "点击在右栏查看完整内容" : undefined}
           >
-            <BlockRenderer block={block} />
+            <BlockRenderer block={block} hl={hl} />
           </div>
         );
       })}

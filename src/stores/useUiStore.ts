@@ -18,6 +18,28 @@ interface UiState {
   /// 左栏中部视图。默认 "projects"
   leftSidebarView: LeftSidebarView;
   setLeftSidebarView: (view: LeftSidebarView) => void;
+
+  /// 页内搜索（cmd+f 触发）：跟"全局搜索"不同，只搜当前 active tab 的 cliBlocks。
+  /// open=true 时右上角浮窗显示。
+  ///
+  /// 高亮粒度细到具体一段匹配文字：
+  ///   - searchQuery：当前 query 本身，BlockStream 拿来给每段命中文本套 <mark>
+  ///   - activeMatch：当前焦点在哪条具体匹配（哪块 / 哪个字段 / 该字段第几次出现）
+  ///     —— 这一段单独用更亮的高亮跟其他匹配区分开
+  inPageSearchOpen: boolean;
+  searchQuery: string;
+  activeMatch: ActiveMatch | null;
+  openInPageSearch: () => void;
+  closeInPageSearch: () => void;
+  setSearchQuery: (q: string) => void;
+  setActiveMatch: (m: ActiveMatch | null) => void;
+}
+
+/// 当前焦点匹配：定位"哪个块的哪个字段的第几次出现"
+export interface ActiveMatch {
+  blockId: string;
+  field: string;
+  occurrence: number;
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -27,4 +49,13 @@ export const useUiStore = create<UiState>((set) => ({
 
   leftSidebarView: "projects",
   setLeftSidebarView: (view) => set({ leftSidebarView: view }),
+
+  inPageSearchOpen: false,
+  searchQuery: "",
+  activeMatch: null,
+  openInPageSearch: () => set({ inPageSearchOpen: true }),
+  closeInPageSearch: () =>
+    set({ inPageSearchOpen: false, searchQuery: "", activeMatch: null }),
+  setSearchQuery: (q) => set({ searchQuery: q }),
+  setActiveMatch: (m) => set({ activeMatch: m }),
 }));
