@@ -284,6 +284,7 @@ pub fn update_llm_settings(
     provider: Option<String>,
     model: Option<String>,
     thinking: Option<bool>,
+    translate_input: Option<bool>,
 ) -> Result<(), String> {
     crate::llm::client::update_global_settings(
         base_url,
@@ -293,6 +294,7 @@ pub fn update_llm_settings(
         provider.unwrap_or_default(),
         model.unwrap_or_default(),
         thinking.unwrap_or(false),
+        translate_input.unwrap_or(false),
     );
     Ok(())
 }

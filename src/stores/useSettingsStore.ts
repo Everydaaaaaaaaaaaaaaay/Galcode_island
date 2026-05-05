@@ -105,6 +105,9 @@ interface SettingsState {
   provider: LlmProvider;
   model: string;
   thinking: boolean;
+  /// 转换为英文输入：默认关。开启时把用户中文 prompt 翻成英文喂给 agent，
+  /// agent 英文输出再翻回中文。关闭时全程中文不走翻译。
+  translateInput: boolean;
   /// 缓存上次拉到的模型列表，避免每次 SettingsModal 打开都拉
   availableModels: string[];
 
@@ -122,6 +125,7 @@ interface SettingsState {
   setProvider: (provider: LlmProvider) => void;
   setModel: (model: string) => void;
   setThinking: (thinking: boolean) => void;
+  setTranslateInput: (translateInput: boolean) => void;
   setAvailableModels: (models: string[]) => void;
   setBackendPref: (backend: BackendKey, field: keyof BackendPrefs, value: string) => void;
   setBackendPrefs: (backend: BackendKey, prefs: Partial<BackendPrefs>) => void;
@@ -138,6 +142,7 @@ export const useSettingsStore = create<SettingsState>()(
       provider: "deepseek",
       model: "deepseek-v4-flash",
       thinking: false,
+      translateInput: false,
       availableModels: [],
       backends: {
         "claude-code": emptyBackendPrefs(),
@@ -152,6 +157,7 @@ export const useSettingsStore = create<SettingsState>()(
       setProvider: (provider) => set({ provider }),
       setModel: (model) => set({ model }),
       setThinking: (thinking) => set({ thinking }),
+      setTranslateInput: (translateInput) => set({ translateInput }),
       setAvailableModels: (availableModels) => set({ availableModels }),
       setBackendPref: (backend, field, value) =>
         set((state) => ({
@@ -179,6 +185,7 @@ export const useSettingsStore = create<SettingsState>()(
         provider: state.provider,
         model: state.model,
         thinking: state.thinking,
+        translateInput: state.translateInput,
         availableModels: state.availableModels,
         backends: state.backends,
       }),

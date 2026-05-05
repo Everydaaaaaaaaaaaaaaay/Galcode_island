@@ -60,6 +60,7 @@ export function ProfileModal(): JSX.Element {
   const provider = useSettingsStore((s) => s.provider);
   const model = useSettingsStore((s) => s.model);
   const thinking = useSettingsStore((s) => s.thinking);
+  const translateInput = useSettingsStore((s) => s.translateInput);
 
   const [localNickname, setLocalNickname] = React.useState(nickname);
   const [localGender, setLocalGender] = React.useState<Gender>(gender);
@@ -93,6 +94,7 @@ export function ProfileModal(): JSX.Element {
         provider,
         model,
         thinking,
+        translateInput,
       });
     } catch (e) {
       console.error("Failed to sync profile nickname to Rust", e);

@@ -707,10 +707,14 @@ pub fn launch_opencode_agent(
 // LLM 翻译/总结管线（输入翻译 + 输出翻译 + summary 生成）
 // ---------------------------------------------------------------------------
 
+/// 输入翻译：用户中文 prompt → 英文（仅当 LLM 已配置 + translate_input 开关开启）。
+/// 关闭时直接返回原中文，让 agent 自己用中文跟用户对话。
 fn translate_input(llm: &Option<LlmConfig>, zh: &str) -> String {
     match llm {
-        Some(cfg) => translate_zh_to_en(cfg, zh).unwrap_or_else(|_| zh.to_string()),
-        None => zh.to_string(),
+        Some(cfg) if cfg.translate_input => {
+            translate_zh_to_en(cfg, zh).unwrap_or_else(|_| zh.to_string())
+        }
+        _ => zh.to_string(),
     }
 }
 
@@ -735,35 +739,44 @@ pub(crate) fn compute_finalize_outcome(
 ) -> FinalizeOutcome {
     // 翻译输出 + 生成 summary 并发——summary 不需要等翻译完成的中文，直接吃英文
     // 也能正确理解（DeepSeek 跨语言无压力）。串行约 5-15s 改并发后取 max(两者)。
+    //
+    // translate_input=false 时跳过 translate_en_to_zh：用户输入是中文，agent
+    // 输出大概率也是中文（agent 跟用户语言走），不需要再翻译；result_zh 直接用
+    // result_en（其实就是中文原文）。summary 始终跑。
     let (result_zh, summary_result) = match llm {
         Some(cfg) => {
-            let cfg_translate = cfg.clone();
             let cfg_summary = cfg.clone();
-            let result_for_translate = result_en.to_string();
             let result_for_summary = result_en.to_string();
             let user_zh_owned = user_zh.to_string();
-            let result_en_fallback = result_en.to_string();
-
             let t_parallel = std::time::Instant::now();
-            let h_translate = std::thread::spawn(move || {
-                translate_en_to_zh(&cfg_translate, &result_for_translate)
-            });
             let h_summary = std::thread::spawn(move || {
                 generate_agent_summary(&cfg_summary, &user_zh_owned, &result_for_summary)
             });
 
-            let translated = h_translate
-                .join()
-                .ok()
-                .and_then(|r| r.ok())
-                .unwrap_or(result_en_fallback);
+            let translated = if cfg.translate_input {
+                let cfg_translate = cfg.clone();
+                let result_for_translate = result_en.to_string();
+                let result_en_fallback = result_en.to_string();
+                let h_translate = std::thread::spawn(move || {
+                    translate_en_to_zh(&cfg_translate, &result_for_translate)
+                });
+                h_translate
+                    .join()
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .unwrap_or(result_en_fallback)
+            } else {
+                // 没启用输入翻译：agent 输出本就是用户的语言（通常中文），直接用
+                result_en.to_string()
+            };
             let summary = h_summary.join().ok().and_then(|r| match r {
                 Ok(s) => Some(Ok(s)),
                 Err(e) => Some(Err(e)),
             });
             eprintln!(
-                "[finalize] parallel translate_out + summary done in {}ms",
-                t_parallel.elapsed().as_millis()
+                "[finalize] parallel translate_out + summary done in {}ms (translate_input={})",
+                t_parallel.elapsed().as_millis(),
+                cfg.translate_input,
             );
             (translated, summary)
         }

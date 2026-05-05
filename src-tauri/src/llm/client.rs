@@ -20,6 +20,13 @@ pub struct GlobalLlmSettings {
     /// 启用时 chat body 里加 `enable_thinking: true` 字段——DeepSeek 等服务商
     /// 识别它启用 reasoning_content；OpenAI 等忽略未知字段，无害。
     pub thinking: bool,
+    /// "转换为英文输入"开关，默认关。
+    /// 关：直接把用户中文 prompt 喂给 agent；agent 输出预期也是中文，跳过
+    ///     translate_en_to_zh，summary 仍然跑（凉宫春日风格化总结）。
+    /// 开：translate_zh_to_en 把 prompt 翻成英文喂给 agent；agent 英文输出
+    ///     再 translate_en_to_zh 翻回中文 + summary。整套流程下能让 agent
+    ///     更稳定（一些模型在英文上表现更好），但代价是多两次翻译延迟。
+    pub translate_input: bool,
 }
 
 static GLOBAL_LLM_SETTINGS: OnceLock<Mutex<GlobalLlmSettings>> = OnceLock::new();
@@ -34,6 +41,8 @@ pub struct LlmConfig {
     pub api_key: String,
     pub model: String,
     pub thinking: bool,
+    /// 是否启用"转换为英文输入"流程；调用方读这个决定要不要跑两次翻译
+    pub translate_input: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -45,6 +54,7 @@ pub fn update_global_settings(
     provider: String,
     model: String,
     thinking: bool,
+    translate_input: bool,
 ) {
     if let Ok(mut settings) = get_global_settings().lock() {
         if !base_url.is_empty() {
@@ -60,6 +70,7 @@ pub fn update_global_settings(
             settings.model = model;
         }
         settings.thinking = thinking;
+        settings.translate_input = translate_input;
     }
 }
 
@@ -68,12 +79,14 @@ pub fn load_llm_config() -> Option<LlmConfig> {
     let mut base_url = String::new();
     let mut model = String::new();
     let mut thinking = false;
+    let mut translate_input = false;
 
     if let Ok(settings) = get_global_settings().lock() {
         api_key = settings.api_key.clone();
         base_url = settings.base_url.clone();
         model = settings.model.clone();
         thinking = settings.thinking;
+        translate_input = settings.translate_input;
     }
 
     if api_key.is_empty() {
@@ -97,6 +110,7 @@ pub fn load_llm_config() -> Option<LlmConfig> {
         api_key,
         model,
         thinking,
+        translate_input,
     })
 }
 

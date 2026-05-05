@@ -41,6 +41,7 @@ function App(): JSX.Element {
       provider: state.provider,
       model: state.model,
       thinking: state.thinking,
+      translateInput: state.translateInput,
     }).catch(console.error);
 
     for (const backend of ["claude-code", "codex", "opencode"] as const) {

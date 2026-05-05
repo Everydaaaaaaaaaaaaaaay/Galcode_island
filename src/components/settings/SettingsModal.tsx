@@ -27,6 +27,7 @@ export function SettingsModal(): JSX.Element {
   const provider = useSettingsStore((s) => s.provider);
   const model = useSettingsStore((s) => s.model);
   const thinking = useSettingsStore((s) => s.thinking);
+  const translateInput = useSettingsStore((s) => s.translateInput);
   const availableModels = useSettingsStore((s) => s.availableModels);
 
   const setSystemPrompt = useSettingsStore((s) => s.setSystemPrompt);
@@ -35,6 +36,7 @@ export function SettingsModal(): JSX.Element {
   const setProvider = useSettingsStore((s) => s.setProvider);
   const setModel = useSettingsStore((s) => s.setModel);
   const setThinking = useSettingsStore((s) => s.setThinking);
+  const setTranslateInput = useSettingsStore((s) => s.setTranslateInput);
   const setAvailableModels = useSettingsStore((s) => s.setAvailableModels);
 
   const [localSystemPrompt, setLocalSystemPrompt] = React.useState(systemPrompt);
@@ -43,6 +45,7 @@ export function SettingsModal(): JSX.Element {
   const [localProvider, setLocalProvider] = React.useState<LlmProvider>(provider);
   const [localModel, setLocalModel] = React.useState(model);
   const [localThinking, setLocalThinking] = React.useState(thinking);
+  const [localTranslateInput, setLocalTranslateInput] = React.useState(translateInput);
   const [localModels, setLocalModels] = React.useState<string[]>(availableModels);
 
   const [fetchState, setFetchState] = React.useState<
@@ -57,6 +60,7 @@ export function SettingsModal(): JSX.Element {
       setLocalProvider(provider);
       setLocalModel(model);
       setLocalThinking(thinking);
+      setLocalTranslateInput(translateInput);
       setLocalModels(availableModels);
       setFetchState({ kind: "idle" });
     }
@@ -68,6 +72,7 @@ export function SettingsModal(): JSX.Element {
     provider,
     model,
     thinking,
+    translateInput,
     availableModels,
   ]);
 
@@ -123,6 +128,7 @@ export function SettingsModal(): JSX.Element {
     setProvider(localProvider);
     setModel(localModel);
     setThinking(localThinking);
+    setTranslateInput(localTranslateInput);
     setAvailableModels(localModels);
     try {
       await invoke("update_llm_settings", {
@@ -134,6 +140,7 @@ export function SettingsModal(): JSX.Element {
         provider: localProvider,
         model: localModel,
         thinking: localThinking,
+        translateInput: localTranslateInput,
       });
     } catch (e) {
       console.error("Failed to update LLM settings in Rust", e);
@@ -299,6 +306,33 @@ export function SettingsModal(): JSX.Element {
                         启用后请求体加 enable_thinking=true。
                         {presetHint ? ` ${presetHint}。` : ""}
                         默认关闭。
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-3 rounded-lg border border-black/5 bg-white/30 p-3 dark:border-white/5 dark:bg-slate-800/30">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={localTranslateInput}
+                      onClick={() => setLocalTranslateInput(!localTranslateInput)}
+                      className={`relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                        localTranslateInput ? "bg-sky-500" : "bg-zinc-300 dark:bg-zinc-600"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+                          localTranslateInput ? "translate-x-[18px]" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm font-medium text-zinc-800 dark:text-zinc-100">
+                        转换为英文输入
+                      </span>
+                      <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                        启用后用 LLM 把中文 prompt 翻成英文喂给 agent，输出再翻回中文；
+                        关闭则全程中文不走翻译。默认关闭。
                       </span>
                     </div>
                   </div>
