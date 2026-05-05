@@ -25,7 +25,10 @@ export type CliBlockType =
   | "diff"
   | "status"
   | "error"
-  | "stderr";
+  | "stderr"
+  /// 用户原始 prompt：前端启动 turn 时自己 append 进去（不来自 backend），
+  /// 流式区右对齐渲染成蓝色气泡。多轮会话能看清"用户 / agent"交替顺序。
+  | "user-prompt";
 
 export interface CliTodoItem {
   id: string;

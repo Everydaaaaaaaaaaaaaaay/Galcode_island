@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../../stores/useAppStore";
 import { useProfileStore } from "../../stores/useProfileStore";
+import { useTabsStore } from "../../stores/useTabsStore";
 import { useActiveTab, useActiveTabActions } from "../../hooks/useActiveTab";
 
 const GREETINGS = [
@@ -72,6 +73,13 @@ export function InputBubble(): JSX.Element {
         agentStatus: "running",
         lastUserPrompt: task.trim().slice(0, 80),
         lastActiveAt: Date.now(),
+      });
+      // 在流式区追加一条用户消息气泡（右对齐），让多轮对话有清晰的"用户/agent"
+      // 交替顺序。前端自管，不依赖 backend emit。
+      useTabsStore.getState().appendCliBlock(activeTabId, {
+        id: `user-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        type: "user-prompt",
+        content: task.trim(),
       });
 
       const res = await invoke<{ sessionId?: string }>("start_agent", {

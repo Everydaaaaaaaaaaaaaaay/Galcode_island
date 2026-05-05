@@ -131,6 +131,26 @@ function statusBadge(status?: string): { label: string; cls: string } {
   }
 }
 
+/// 用户原始 prompt：右对齐蓝色气泡，跟 agent 输出（左侧）形成对话感。
+/// 不走 markdown — 用户输入通常是单行中文，pre-wrap 保留换行就够。
+function UserPromptBlock({
+  block,
+  hl,
+}: {
+  block: CliBlock;
+  hl: HighlightCtx;
+}): JSX.Element | null {
+  const content = block.content?.trim();
+  if (!content) return null;
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl rounded-tr-sm border border-sky-400/35 bg-sky-400/15 px-3 py-1.5 text-[13px] leading-relaxed text-zinc-800 shadow-sm dark:border-sky-300/30 dark:bg-sky-400/15 dark:text-zinc-100">
+        {highlightText(content, hl.query, block.id, "content", hl.activeMatch)}
+      </div>
+    </div>
+  );
+}
+
 function TextBlock({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element | null {
   const content = block.content?.trim();
   if (!content) return null;
@@ -371,6 +391,8 @@ function ErrorLine({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.El
 
 function BlockRenderer({ block, hl }: { block: CliBlock; hl: HighlightCtx }): JSX.Element | null {
   switch (block.type) {
+    case "user-prompt":
+      return <UserPromptBlock block={block} hl={hl} />;
     case "text":
       return <TextBlock block={block} hl={hl} />;
     case "thought":

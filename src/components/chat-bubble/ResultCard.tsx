@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../../stores/useAppStore";
+import { useTabsStore } from "../../stores/useTabsStore";
 import { useActiveTab, useActiveTabActions } from "../../hooks/useActiveTab";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -38,6 +39,12 @@ export function ResultCard(): JSX.Element {
       agentStatus: "running",
       lastUserPrompt: opt.slice(0, 80),
       lastActiveAt: Date.now(),
+    });
+    // 流式区追加用户消息气泡，跟 InputBubble 启动路径行为一致
+    useTabsStore.getState().appendCliBlock(activeTabId, {
+      id: `user-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: "user-prompt",
+      content: opt,
     });
 
     try {
