@@ -91,6 +91,9 @@ pub async fn start_agent(
     cwd: Option<String>,
     agent: Option<String>,
     run_id: Option<String>,
+    // 可选：前端持久化的 tab.sessionId（重启 app 后内存 last_session_per_context
+    // 是空的，前端 localStorage 留着 sessionId，传过来当 resume hint）。
+    session_id: Option<String>,
 ) -> Result<LaunchResult, String> {
     let cwd = cwd.unwrap_or_else(|| ".".to_string());
     let agent_type = agent
@@ -130,6 +133,7 @@ pub async fn start_agent(
             run_id,
             cwd,
             user_input_zh,
+            session_id,
         ),
         "opencode" => manager::launch_opencode_agent(
             app,
@@ -138,6 +142,7 @@ pub async fn start_agent(
             run_id,
             cwd,
             user_input_zh,
+            session_id,
         ),
         "codex" => manager::launch_codex_agent(
             app,
@@ -146,6 +151,7 @@ pub async fn start_agent(
             run_id,
             cwd,
             user_input_zh,
+            session_id,
         ),
         _ => Err(format!("暂不支持的 agent 类型: {}", agent_type)),
     };
@@ -230,6 +236,9 @@ pub async fn finalize_pending(
     session_id: String,
     user_zh: String,
     result_raw: String,
+    // 上轮的 backend native session id（前端持久化的 tab.agentNativeSessionId），
+    // emit 给前端做 round-trip 持久化 —— 退出再次重启后还能续上
+    agent_native_session_id: Option<String>,
 ) -> Result<(), String> {
     use crate::ipc::events::SessionCompletePayload;
     use tauri::Emitter;
@@ -245,6 +254,7 @@ pub async fn finalize_pending(
             SessionCompletePayload {
                 session_id: session_id.clone(),
                 run_id: Some(run_id),
+                agent_native_session_id,
                 mode: outcome.mode,
                 emotion: outcome.emotion,
                 summary_translation: outcome.summary_translation,
@@ -274,6 +284,7 @@ pub fn update_llm_settings(
     provider: Option<String>,
     model: Option<String>,
     thinking: Option<bool>,
+    translate_input: Option<bool>,
 ) -> Result<(), String> {
     crate::llm::client::update_global_settings(
         base_url,
@@ -283,6 +294,7 @@ pub fn update_llm_settings(
         provider.unwrap_or_default(),
         model.unwrap_or_default(),
         thinking.unwrap_or(false),
+        translate_input.unwrap_or(false),
     );
     Ok(())
 }

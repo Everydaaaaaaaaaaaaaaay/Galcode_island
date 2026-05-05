@@ -6,6 +6,7 @@ import {
   useSettingsStore,
   type LlmProvider,
 } from "../../stores/useSettingsStore";
+import { useProfileStore } from "../../stores/useProfileStore";
 import { AgentBackendsSection } from "./AgentBackendsSection";
 
 import { invoke } from "@tauri-apps/api/core";
@@ -17,31 +18,34 @@ export function SettingsModal(): JSX.Element {
   const isSettingsModalOpen = useSettingsStore((s) => s.isSettingsModalOpen);
   const closeSettingsModal = useSettingsStore((s) => s.closeSettingsModal);
 
-  const nickname = useSettingsStore((s) => s.nickname);
+  // nickname 现在在 useProfileStore 里管理（个人档案）；保存时仍要传给后端
+  // LLM system prompt，所以这里只读不写。
+  const nickname = useProfileStore((s) => s.nickname);
   const systemPrompt = useSettingsStore((s) => s.systemPrompt);
   const apiKey = useSettingsStore((s) => s.apiKey);
   const apiBaseUrl = useSettingsStore((s) => s.apiBaseUrl);
   const provider = useSettingsStore((s) => s.provider);
   const model = useSettingsStore((s) => s.model);
   const thinking = useSettingsStore((s) => s.thinking);
+  const translateInput = useSettingsStore((s) => s.translateInput);
   const availableModels = useSettingsStore((s) => s.availableModels);
 
-  const setNickname = useSettingsStore((s) => s.setNickname);
   const setSystemPrompt = useSettingsStore((s) => s.setSystemPrompt);
   const setApiKey = useSettingsStore((s) => s.setApiKey);
   const setApiBaseUrl = useSettingsStore((s) => s.setApiBaseUrl);
   const setProvider = useSettingsStore((s) => s.setProvider);
   const setModel = useSettingsStore((s) => s.setModel);
   const setThinking = useSettingsStore((s) => s.setThinking);
+  const setTranslateInput = useSettingsStore((s) => s.setTranslateInput);
   const setAvailableModels = useSettingsStore((s) => s.setAvailableModels);
 
-  const [localNickname, setLocalNickname] = React.useState(nickname);
   const [localSystemPrompt, setLocalSystemPrompt] = React.useState(systemPrompt);
   const [localApiKey, setLocalApiKey] = React.useState(apiKey);
   const [localApiBaseUrl, setLocalApiBaseUrl] = React.useState(apiBaseUrl);
   const [localProvider, setLocalProvider] = React.useState<LlmProvider>(provider);
   const [localModel, setLocalModel] = React.useState(model);
   const [localThinking, setLocalThinking] = React.useState(thinking);
+  const [localTranslateInput, setLocalTranslateInput] = React.useState(translateInput);
   const [localModels, setLocalModels] = React.useState<string[]>(availableModels);
 
   const [fetchState, setFetchState] = React.useState<
@@ -50,25 +54,25 @@ export function SettingsModal(): JSX.Element {
 
   React.useEffect(() => {
     if (isSettingsModalOpen) {
-      setLocalNickname(nickname);
       setLocalSystemPrompt(systemPrompt);
       setLocalApiKey(apiKey);
       setLocalApiBaseUrl(apiBaseUrl);
       setLocalProvider(provider);
       setLocalModel(model);
       setLocalThinking(thinking);
+      setLocalTranslateInput(translateInput);
       setLocalModels(availableModels);
       setFetchState({ kind: "idle" });
     }
   }, [
     isSettingsModalOpen,
-    nickname,
     systemPrompt,
     apiKey,
     apiBaseUrl,
     provider,
     model,
     thinking,
+    translateInput,
     availableModels,
   ]);
 
@@ -118,23 +122,25 @@ export function SettingsModal(): JSX.Element {
   };
 
   const handleSave = async () => {
-    setNickname(localNickname);
     setSystemPrompt(localSystemPrompt);
     setApiKey(localApiKey);
     setApiBaseUrl(localApiBaseUrl);
     setProvider(localProvider);
     setModel(localModel);
     setThinking(localThinking);
+    setTranslateInput(localTranslateInput);
     setAvailableModels(localModels);
     try {
       await invoke("update_llm_settings", {
         baseUrl: localApiBaseUrl,
         apiKey: localApiKey,
-        nickname: localNickname,
+        // nickname 走 ProfileStore，保存时直接读最新值（即便用户没动也不影响）
+        nickname,
         systemPrompt: localSystemPrompt,
         provider: localProvider,
         model: localModel,
         thinking: localThinking,
+        translateInput: localTranslateInput,
       });
     } catch (e) {
       console.error("Failed to update LLM settings in Rust", e);
@@ -171,19 +177,6 @@ export function SettingsModal(): JSX.Element {
 
               <div className="flex flex-col gap-6 overflow-y-auto px-6 py-5">
                 <section className="flex flex-col gap-5">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                      希望团长怎样称呼你？
-                    </label>
-                    <input
-                      type="text"
-                      value={localNickname}
-                      onChange={(e) => setLocalNickname(e.target.value)}
-                      placeholder="例如：部员 / 阿虚"
-                      className={inputCls}
-                    />
-                  </div>
-
                   <div className="flex flex-col gap-1.5">
                     <label className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
                       你想跟团长说的悄悄话（系统提示词）：
@@ -313,6 +306,33 @@ export function SettingsModal(): JSX.Element {
                         启用后请求体加 enable_thinking=true。
                         {presetHint ? ` ${presetHint}。` : ""}
                         默认关闭。
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-3 rounded-lg border border-black/5 bg-white/30 p-3 dark:border-white/5 dark:bg-slate-800/30">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={localTranslateInput}
+                      onClick={() => setLocalTranslateInput(!localTranslateInput)}
+                      className={`relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                        localTranslateInput ? "bg-sky-500" : "bg-zinc-300 dark:bg-zinc-600"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+                          localTranslateInput ? "translate-x-[18px]" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm font-medium text-zinc-800 dark:text-zinc-100">
+                        转换为英文输入
+                      </span>
+                      <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                        启用后用 LLM 把中文 prompt 翻成英文喂给 agent，输出再翻回中文；
+                        关闭则全程中文不走翻译。默认关闭。
                       </span>
                     </div>
                   </div>

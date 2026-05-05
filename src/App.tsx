@@ -1,16 +1,21 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo } from "react";
-import { GlobalTopBar } from "./components/GlobalTopBar";
 import { MainView } from "./components/MainView";
 import { WelcomeView } from "./components/welcome/WelcomeView";
 import { SettingsModal } from "./components/settings/SettingsModal";
+import { ProfileModal } from "./components/profile/ProfileModal";
+import { SidebarLeft } from "./components/sidebar/SidebarLeft";
+import { SidebarRight } from "./components/sidebar/SidebarRight";
+import { InPageSearch } from "./components/InPageSearch";
 import { useAgentIPC } from "./hooks/useAgentIPC";
 import { useCliStream } from "./hooks/useCliStream";
+import { useInPageSearchHotkey } from "./hooks/useInPageSearchHotkey";
 import { useTabsReattach } from "./hooks/useTabsReattach";
 import { useThemeHotkey } from "./hooks/useThemeHotkey";
 import { useAppStore } from "./stores/useAppStore";
 import { useSettingsStore } from "./stores/useSettingsStore";
+import { useProfileStore } from "./stores/useProfileStore";
 
 function App(): JSX.Element {
   const isStarted = useAppStore((state) => state.isStarted);
@@ -19,20 +24,24 @@ function App(): JSX.Element {
   useAgentIPC();
   useCliStream();
   useTabsReattach();
+  useInPageSearchHotkey();
 
   useEffect(() => {
     const state = useSettingsStore.getState();
+    const profile = useProfileStore.getState();
 
     // 启动时把 persist 出来的 LLM + 三个 backend 偏好同步给 Rust 端的内存单例。
     // Rust 端 OnceLock<Mutex<...>> 进程重启就空——前端 zustand persist 是真相之源。
+    // nickname 在 useProfileStore 里管理（个人档案），其它在 useSettingsStore。
     invoke("update_llm_settings", {
       baseUrl: state.apiBaseUrl,
       apiKey: state.apiKey,
-      nickname: state.nickname,
+      nickname: profile.nickname,
       systemPrompt: state.systemPrompt,
       provider: state.provider,
       model: state.model,
       thinking: state.thinking,
+      translateInput: state.translateInput,
     }).catch(console.error);
 
     for (const backend of ["claude-code", "codex", "opencode"] as const) {
@@ -47,8 +56,22 @@ function App(): JSX.Element {
     }
   }, []);
 
+  // 三栏布局：isStarted=true 时左栏 SidebarLeft + 中栏 MainView + 右栏 SidebarRight
+  // （右栏按 useUiStore.detailBlock 决定开合）；isStarted=false 时只显示 WelcomeView
+  // 占满整个内容区，左右栏不渲染（用户还没开始项目）。
   const currentScreen = useMemo(() => {
-    return isStarted ? <MainView /> : <WelcomeView />;
+    if (!isStarted) return <WelcomeView />;
+    return (
+      <div className="relative flex h-full w-full">
+        <SidebarLeft />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <MainView />
+        </div>
+        <SidebarRight />
+        {/* cmd+f 触发的页内搜索浮窗：只在主界面挂，绝对定位浮在右上角 */}
+        <InPageSearch />
+      </div>
+    );
   }, [isStarted]);
 
   return (
@@ -105,7 +128,6 @@ function App(): JSX.Element {
       {/* Glass container */}
       <div className="absolute inset-2 overflow-hidden rounded-[22px] border border-white/60 bg-white/70 shadow-[0_8px_40px_rgba(0,0,0,0.06)] backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60 dark:shadow-none">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_18%,rgba(255,255,255,0.3),transparent_38%),radial-gradient(circle_at_88%_82%,rgba(0,0,0,0.04),transparent_30%)] dark:bg-[radial-gradient(circle_at_12%_18%,rgba(255,255,255,0.04),transparent_38%),radial-gradient(circle_at_88%_82%,rgba(255,255,255,0.02),transparent_30%)]" />
-        <GlobalTopBar />
         <AnimatePresence mode="wait">
           <motion.div
             key={isStarted ? "main" : "welcome"}
@@ -113,12 +135,13 @@ function App(): JSX.Element {
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.985 }}
             transition={{ duration: 0.25, ease: "easeOut" }}
-            className="relative z-10 h-full w-full pt-8"
+            className="relative z-10 h-full w-full"
           >
             {currentScreen}
           </motion.div>
         </AnimatePresence>
         <SettingsModal />
+        <ProfileModal />
       </div>
     </main>
   );

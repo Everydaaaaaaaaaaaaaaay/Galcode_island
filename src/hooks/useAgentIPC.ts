@@ -16,12 +16,37 @@
 import { useEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
+import { useSettingsStore } from "../stores/useSettingsStore";
 import { useTabsStore, type TabState } from "../stores/useTabsStore";
 import type {
   ErrorPayload,
   SessionCompletePayload,
   StatusChangedPayload,
 } from "../types/ipc";
+
+/// 启发式判断文本是否中文：CJK 汉字占非空白字符 > 30% 即视为中文。
+/// 用于 cmd+f 翻译模式下，agent 实际输出已经是中文（仓库中文 / 直接 quote 中文）
+/// 时跳过覆写 —— 既避免把中文用 result_zh 覆盖（result_zh 此时跟原文相同但拼接版
+/// 略有差异，多块写到单块会引入冗余），也避免视觉抖动。
+function looksChinese(text: string): boolean {
+  if (!text) return false;
+  let cjk = 0;
+  let total = 0;
+  for (const ch of text) {
+    if (/\s/.test(ch)) continue;
+    total += 1;
+    const code = ch.codePointAt(0) ?? 0;
+    if (
+      (code >= 0x3400 && code <= 0x4dbf) ||
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0xf900 && code <= 0xfaff)
+    ) {
+      cjk += 1;
+    }
+  }
+  if (total < 8) return false;
+  return cjk * 10 > total * 3;
+}
 
 function mapAgentStatusToStage(
   st: string,
@@ -129,8 +154,31 @@ export function useAgentIPC(): void {
           }
           ensureSessionLinked(tabId, p?.sessionId);
 
+          // 启用了"转换为英文输入"时，agent 流式输出的最后一个 text 块（agent 的
+          // 最终回复）通常是英文，需要用 finalize 翻译后的中文 resultZh 覆写它，
+          // 否则用户在 BlockStream 里看到的还是英文。
+          // 但要做启发式判断：仓库内容是中文 / agent 直接 quote 中文文件时，
+          // 输出本身已经是中文 —— 这种情况跳过覆写避免视觉抖动 + 单块膨胀。
+          const translateInputOn = useSettingsStore.getState().translateInput;
+          if (translateInputOn && p.resultZh) {
+            const store = useTabsStore.getState();
+            const tab = store.tabs[tabId];
+            if (tab) {
+              for (let i = tab.cliBlocks.length - 1; i >= 0; i -= 1) {
+                const b = tab.cliBlocks[i];
+                if (b.type !== "text") continue;
+                if (looksChinese(b.content ?? "")) {
+                  // 最后一个 text 块本来就是中文，无需覆写
+                  break;
+                }
+                store.upsertCliBlock(tabId, { ...b, content: p.resultZh });
+                break;
+              }
+            }
+          }
+
           const update = useTabsStore.getState().updateTab;
-          update(tabId, {
+          const patch: Partial<TabState> = {
             uiState: "done",
             percent: 100,
             lastStage: "done",
@@ -144,7 +192,13 @@ export function useAgentIPC(): void {
             // finalize 已经走完，清掉中间结果防止下次启动重复触发 finalize_pending
             pendingResultRaw: null,
             pendingUserZh: null,
-          });
+          };
+          // 后端 native session id 仅在成功完成时存在；错误 / 用户中断的
+          // session-complete 不带这个字段，保留之前的 hint 不动
+          if (p.agentNativeSessionId) {
+            patch.agentNativeSessionId = p.agentNativeSessionId;
+          }
+          update(tabId, patch);
 
           // 非活动 tab 完成时打未读小红点（D 阶段 TabBar 会显示）
           const activeId = useTabsStore.getState().activeTabId;

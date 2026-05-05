@@ -16,6 +16,9 @@ export interface StatusChangedPayload {
 export interface SessionCompletePayload {
   sessionId: string;
   runId?: string;
+  /// backend native session id（Claude CLI session / Codex thread / OpenCode session）
+  /// —— 前端持久化它做下次重启的 resume hint
+  agentNativeSessionId?: string;
   mode?: string;
   emotion?: string;
   summaryTranslation?: string;

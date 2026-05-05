@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, type KeyboardEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../../stores/useAppStore";
-import { useSettingsStore } from "../../stores/useSettingsStore";
+import { useProfileStore } from "../../stores/useProfileStore";
+import { useTabsStore } from "../../stores/useTabsStore";
 import { useActiveTab, useActiveTabActions } from "../../hooks/useActiveTab";
 
 const GREETINGS = [
@@ -14,7 +15,7 @@ const GREETINGS = [
 ];
 
 export function InputBubble(): JSX.Element {
-  const nickname = useSettingsStore((s) => s.nickname);
+  const nickname = useProfileStore((s) => s.nickname);
   const displayNickname = nickname.trim() ? nickname : "部员";
   const addLogEntry = useAppStore((s) => s.addLogEntry);
 
@@ -27,6 +28,9 @@ export function InputBubble(): JSX.Element {
 
   const [greeting, setGreeting] = useState("");
   const [displayedGreeting, setDisplayedGreeting] = useState("");
+  // 中文输入法 composition 期间不要把 Enter 当发送 — 双保险用 keydown.isComposing
+  // + composition* 事件标记
+  const isComposingRef = useRef(false);
 
   useEffect(() => {
     if (agentStatus === "idle") {
@@ -54,19 +58,31 @@ export function InputBubble(): JSX.Element {
   const handleLaunch = async (): Promise<void> => {
     if (!task.trim() || !activeTabId || !projectPath) return;
     try {
-      // 重置该 tab 的会话级字段（保留 task / agent / projectPath / title）；
-      // 然后置 running 状态、清掉 sessionId（让 IPC 早期事件按 fallback 路由进来）
+      // 上一轮 backend native session id（Claude CLI session / Codex thread /
+      // OpenCode session）作为 resume 候选 —— 重启 app 后内存 last_session_per_context
+      // 是空的，前端持久化的 native id 能续上下文。**不能传 tab.sessionId**（那是
+      // 前端 AgentSession UUID，跟后端 --resume 期望的 ID 不是一回事）。
+      const resumeHint = tab.agentNativeSessionId;
+
+      // 切到 running 状态。
+      // **不清 cliBlocks** —— 单项目多轮会话累积保留，让用户能看到完整工作历史；
+      // 也不清上次的 resultZh / summary / emotion / suggestionOptions —— uiState=running
+      // 期间 RunningBubble 会盖住 ResultCard，新 turn 完成时这些字段被新的
+      // session-complete 事件覆盖。
       update({
-        sessionId: null,
         percent: 0,
         uiState: "running",
         mode: "working",
         agentStatus: "running",
-        cliBlocks: [],
-        resultZh: "",
-        summaryTranslation: "",
-        emotionText: "",
-        suggestionOptions: [],
+        lastUserPrompt: task.trim().slice(0, 80),
+        lastActiveAt: Date.now(),
+      });
+      // 在流式区追加一条用户消息气泡（右对齐），让多轮对话有清晰的"用户/agent"
+      // 交替顺序。前端自管，不依赖 backend emit。
+      useTabsStore.getState().appendCliBlock(activeTabId, {
+        id: `user-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        type: "user-prompt",
+        content: task.trim(),
       });
 
       const res = await invoke<{ sessionId?: string }>("start_agent", {
@@ -74,6 +90,7 @@ export function InputBubble(): JSX.Element {
         cwd: projectPath || ".",
         agent: tab.agent,
         runId: activeTabId,
+        sessionId: resumeHint,
       });
       if (res?.sessionId) {
         update({ sessionId: res.sessionId });
@@ -125,13 +142,24 @@ export function InputBubble(): JSX.Element {
             <textarea
               value={task}
               onChange={(e) => update({ task: e.target.value })}
-              placeholder="和团长对话……"
+              placeholder="和团长对话……  (Enter 发送，Shift+Enter 换行)"
               className="min-h-[100px] w-full resize-none rounded-xl border border-black/5 bg-white/50 p-3.5 text-sm text-zinc-800 outline-none transition-all placeholder:text-zinc-400 focus:border-sky-400/50 focus:bg-white/80 focus:ring-2 focus:ring-sky-400/15 dark:border-white/5 dark:bg-slate-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-sky-400/40 dark:focus:bg-slate-900/60 dark:focus:ring-sky-400/10"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void handleLaunch();
-                }
+              onCompositionStart={() => {
+                isComposingRef.current = true;
+              }}
+              onCompositionEnd={() => {
+                isComposingRef.current = false;
+              }}
+              onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
+                if (e.key !== "Enter") return;
+                if (e.shiftKey) return;
+                // IME 候选词期间按 Enter 是选词，跳过发送
+                const native = e.nativeEvent as KeyboardEvent["nativeEvent"] & {
+                  isComposing?: boolean;
+                };
+                if (native.isComposing || e.keyCode === 229 || isComposingRef.current) return;
+                e.preventDefault();
+                void handleLaunch();
               }}
             />
 

@@ -45,8 +45,14 @@ export interface TabState {
   bubble: string;
   /// 进度条百分比
   percent: number;
-  /// 后端 session_id（claude/codex/opencode 各自的会话标识，用于续接）
+  /// 后端 session_id（前端 AgentSession UUID）—— 跟下面的 agentNativeSessionId
+  /// 不一样：这个是每轮新生成的，仅作 IPC 事件 fallback 路由。
   sessionId: string | null;
+  /// **真正能用于 resume 的 backend native session id**：Claude CLI session id /
+  /// Codex thread id / OpenCode session id。每轮 turn 完成时由
+  /// session-complete.agentNativeSessionId 更新；持久化后下次 launch 传给后端
+  /// 当 resume hint，--resume 才能真正续上 conversation。
+  agentNativeSessionId: string | null;
   /// 完成后的中文翻译输出
   resultZh: string;
   /// 凉宫春日总结
@@ -59,7 +65,7 @@ export interface TabState {
   lastStage: LastStage;
   /// 流式 blocks（BlockStream 渲染源）
   cliBlocks: CliBlock[];
-  /// 非活动 tab 完成后置 true，TabBar 显示小红点；切到该 tab 自动清掉
+  /// 非活动 tab 完成后置 true，TabBar/项目卡 显示小红点；切到自动清掉
   hasUnread: boolean;
   /// agent turn 完成、finalize（翻译+总结）跑到一半时退出 app 用：后端在
   /// finalize 之前 emit `agent://result-raw`，前端写入这两个字段并持久化；
@@ -69,13 +75,52 @@ export interface TabState {
   pendingUserZh: string | null;
   /// 创建时间戳，用来排序 / 关闭时回退到上一个
   createdAt: number;
+  /// 最后活跃时间（毫秒）：每次有 IPC 事件 / 用户启动 / 流式 block 写入都刷新；
+  /// 左栏项目卡按这个排序，让"刚动过的"项目浮上来。
+  lastActiveAt: number;
+  /// 最近一次启动用的中文 prompt（截断），左栏项目卡作为摘要标题展示。
+  /// 没启动过的 tab 为 null —— 显示 fallback "新会话"或 projectPath basename。
+  lastUserPrompt: string | null;
 }
+
+/// 已关闭项目的归档摘要 —— 关闭 tab 时把核心元数据塞进 history 里，
+/// "历史会话"菜单按 closedAt 倒序展示；用户点回去能 restore 出新 tab
+/// （沿用 projectPath / agent，sessionId 作为 resume hint）。
+///
+/// **不持久化** cliBlocks/pending* 等大字段，避免 history 列表撑爆 localStorage。
+export interface ArchivedSession {
+  /// 归档项 id（=== 原 tab.id；防止同一 tab 被关闭两次产生重复条目）
+  id: string;
+  /// 关闭时刻（ms）；用作排序键
+  closedAt: number;
+  /// 创建时刻（保留作展示）
+  createdAt: number;
+  agent: AgentType;
+  projectPath: string | null;
+  /// 摘要标题：lastUserPrompt > task > title
+  summary: string;
+  /// 前端 sessionId：恢复 tab 时仅用于 IPC fallback；真正续 conversation 看
+  /// agentNativeSessionId 字段
+  sessionId: string | null;
+  /// backend native session id —— 真正能让 Claude `--resume` / Codex `thread/resume`
+  /// / OpenCode 复用 session 续上对话的那个 ID
+  agentNativeSessionId: string | null;
+  /// 上次的 ResultCard 内容，恢复 tab 时回填，让用户能快速看到上次的结果
+  summaryTranslation: string;
+  emotionText: string;
+  resultZh: string;
+  suggestionOptions: string[];
+}
+
+const HISTORY_LIMIT = 100;
 
 interface TabsStoreState {
   tabs: Record<string, TabState>;
   /// TabBar 显示顺序；新建的追加到末尾；关闭时从这里 splice
   order: string[];
   activeTabId: string | null;
+  /// 历史会话归档；按 closedAt 倒序由 selector 处理，store 内顺序不保证
+  history: ArchivedSession[];
 
   /// 创建一个新 tab。init 可指定初始字段（agent / projectPath / 标题等），
   /// 返回新 tab 的 id；不会自动切到新 tab，调用方如需切换显式调 setActiveTab。
@@ -105,6 +150,15 @@ interface TabsStoreState {
   hasTab: (runId: string) => boolean;
   /// 通过 sessionId 反查 runId（IPC 事件早期还没回填 runId 时用）。
   findTabBySessionId: (sessionId: string) => string | null;
+
+  /// 从历史归档恢复一个 tab：用归档的 projectPath / agent / sessionId
+  /// 创建新 tab，回填上次的 ResultCard 内容；从 history 移除该条目避免重复。
+  /// 返回新 tab 的 id；归档不存在时返回 null。
+  restoreFromHistory: (archivedId: string) => string | null;
+  /// 单条删除归档（用户右键删除）
+  removeFromHistory: (archivedId: string) => void;
+  /// 清空整个历史
+  clearHistory: () => void;
 }
 
 function generateTabId(): string {
@@ -128,6 +182,7 @@ function makeDefaultTab(init?: Partial<TabState>): TabState {
     bubble: init?.bubble ?? "",
     percent: init?.percent ?? 0,
     sessionId: init?.sessionId ?? null,
+    agentNativeSessionId: init?.agentNativeSessionId ?? null,
     resultZh: init?.resultZh ?? "",
     summaryTranslation: init?.summaryTranslation ?? "",
     emotionText: init?.emotionText ?? "",
@@ -138,6 +193,8 @@ function makeDefaultTab(init?: Partial<TabState>): TabState {
     cliBlocks: init?.cliBlocks ?? [],
     hasUnread: init?.hasUnread ?? false,
     createdAt: 0,
+    lastActiveAt: init?.lastActiveAt ?? 0,
+    lastUserPrompt: init?.lastUserPrompt ?? null,
   };
 }
 
@@ -195,6 +252,7 @@ export const useTabsStore = create<TabsStoreState>()(
   tabs: {},
   order: [],
   activeTabId: null,
+  history: [],
 
   createTab: (init) => {
     const requestedId = init?.id;
@@ -203,10 +261,12 @@ export const useTabsStore = create<TabsStoreState>()(
       return requestedId;
     }
     const id = requestedId ?? generateTabId();
+    const now = Date.now();
     const tab: TabState = {
       ...makeDefaultTab(init),
       id,
-      createdAt: Date.now(),
+      createdAt: now,
+      lastActiveAt: init?.lastActiveAt ?? now,
     };
     set((state) => ({
       tabs: { ...state.tabs, [id]: tab },
@@ -217,7 +277,8 @@ export const useTabsStore = create<TabsStoreState>()(
 
   removeTab: (id) => {
     set((state) => {
-      if (!state.tabs[id]) return state;
+      const tab = state.tabs[id];
+      if (!tab) return state;
       const nextTabs = { ...state.tabs };
       delete nextTabs[id];
       const nextOrder = state.order.filter((tid) => tid !== id);
@@ -227,7 +288,37 @@ export const useTabsStore = create<TabsStoreState>()(
         const idx = state.order.indexOf(id);
         nextActive = nextOrder[Math.max(0, idx - 1)] ?? nextOrder[0] ?? null;
       }
-      return { tabs: nextTabs, order: nextOrder, activeTabId: nextActive };
+
+      // 归档到 history：保留核心元数据 + 上次结果，丢弃 cliBlocks / pending* 等大字段
+      const summary =
+        (tab.lastUserPrompt && tab.lastUserPrompt.trim()) ||
+        (tab.task && tab.task.trim().slice(0, 80)) ||
+        tab.title ||
+        "新会话";
+      const archived: ArchivedSession = {
+        id: tab.id,
+        closedAt: Date.now(),
+        createdAt: tab.createdAt,
+        agent: tab.agent,
+        projectPath: tab.projectPath,
+        summary,
+        sessionId: tab.sessionId,
+        agentNativeSessionId: tab.agentNativeSessionId,
+        summaryTranslation: tab.summaryTranslation,
+        emotionText: tab.emotionText,
+        resultZh: tab.resultZh,
+        suggestionOptions: tab.suggestionOptions,
+      };
+      // 同 id 已在 history（极少见，比如 reattach 失败后重 close）→ 替换
+      const filtered = state.history.filter((h) => h.id !== archived.id);
+      const nextHistory = [archived, ...filtered].slice(0, HISTORY_LIMIT);
+
+      return {
+        tabs: nextTabs,
+        order: nextOrder,
+        activeTabId: nextActive,
+        history: nextHistory,
+      };
     });
   },
 
@@ -286,7 +377,12 @@ export const useTabsStore = create<TabsStoreState>()(
       if (!tab) return state;
       const next = [...tab.cliBlocks, block];
       const trimmed = next.length > MAX_BLOCKS ? next.slice(-TRIM_TARGET) : next;
-      return { tabs: { ...state.tabs, [id]: { ...tab, cliBlocks: trimmed } } };
+      return {
+        tabs: {
+          ...state.tabs,
+          [id]: { ...tab, cliBlocks: trimmed, lastActiveAt: Date.now() },
+        },
+      };
     });
   },
 
@@ -303,7 +399,12 @@ export const useTabsStore = create<TabsStoreState>()(
         next = [...tab.cliBlocks, block];
       }
       const trimmed = next.length > MAX_BLOCKS ? next.slice(-TRIM_TARGET) : next;
-      return { tabs: { ...state.tabs, [id]: { ...tab, cliBlocks: trimmed } } };
+      return {
+        tabs: {
+          ...state.tabs,
+          [id]: { ...tab, cliBlocks: trimmed, lastActiveAt: Date.now() },
+        },
+      };
     });
   },
 
@@ -323,6 +424,45 @@ export const useTabsStore = create<TabsStoreState>()(
       if (tab.sessionId === sessionId) return tab.id;
     }
     return null;
+  },
+
+  restoreFromHistory: (archivedId) => {
+    const archived = get().history.find((h) => h.id === archivedId);
+    if (!archived) return null;
+    // 用归档元数据创建新 tab。**不复用原 id**：原 id 可能跟某个被 reattach
+    // 出来的活跃 tab 撞 id；新 UUID 安全。后端 last_session_per_context 会
+    // 按 (agent, cwd) 自动 resume，不依赖前端 runId。
+    const newId = get().createTab({
+      title: archived.summary.slice(0, 40),
+      agent: archived.agent,
+      projectPath: archived.projectPath,
+      sessionId: archived.sessionId,
+      agentNativeSessionId: archived.agentNativeSessionId,
+      lastUserPrompt: archived.summary,
+      summaryTranslation: archived.summaryTranslation,
+      emotionText: archived.emotionText,
+      resultZh: archived.resultZh,
+      suggestionOptions: archived.suggestionOptions,
+      // 有 summary 就让 ResultCard 直接显示上次结果
+      mode: archived.summaryTranslation || archived.emotionText ? "complete" : "idle",
+      uiState: archived.summaryTranslation || archived.emotionText ? "done" : "idle",
+      lastStage: archived.summaryTranslation || archived.emotionText ? "done" : "default",
+    });
+    // 从 history 移除避免重复出现
+    set((state) => ({
+      history: state.history.filter((h) => h.id !== archivedId),
+    }));
+    return newId;
+  },
+
+  removeFromHistory: (archivedId) => {
+    set((state) => ({
+      history: state.history.filter((h) => h.id !== archivedId),
+    }));
+  },
+
+  clearHistory: () => {
+    set({ history: [] });
   },
     }),
     {
@@ -377,6 +517,7 @@ export const useTabsStore = create<TabsStoreState>()(
           ),
           order: state.order,
           activeTabId: state.activeTabId,
+          history: state.history.slice(0, HISTORY_LIMIT),
         }) as unknown as TabsStoreState,
       // 重启加载时再 sanitize 一次，防止旧版本残留运行时字段
       onRehydrateStorage: () => (state) => {
@@ -384,6 +525,8 @@ export const useTabsStore = create<TabsStoreState>()(
         for (const id of Object.keys(state.tabs)) {
           state.tabs[id] = sanitizeTabForPersist(state.tabs[id]);
         }
+        // 旧版本没有 history 字段，rehydrate 后是 undefined，兜底为空数组
+        if (!Array.isArray(state.history)) state.history = [];
       },
     },
   ),

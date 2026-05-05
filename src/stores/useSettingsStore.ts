@@ -98,13 +98,16 @@ export function getProviderPreset(id: LlmProvider): ProviderPreset {
 }
 
 interface SettingsState {
-  nickname: string;
+  // nickname 已搬到 useProfileStore，不再放这里
   systemPrompt: string;
   apiKey: string;
   apiBaseUrl: string;
   provider: LlmProvider;
   model: string;
   thinking: boolean;
+  /// 转换为英文输入：默认关。开启时把用户中文 prompt 翻成英文喂给 agent，
+  /// agent 英文输出再翻回中文。关闭时全程中文不走翻译。
+  translateInput: boolean;
   /// 缓存上次拉到的模型列表，避免每次 SettingsModal 打开都拉
   availableModels: string[];
 
@@ -116,13 +119,13 @@ interface SettingsState {
   isSettingsModalOpen: boolean;
 
   // Actions
-  setNickname: (nickname: string) => void;
   setSystemPrompt: (systemPrompt: string) => void;
   setApiKey: (apiKey: string) => void;
   setApiBaseUrl: (apiBaseUrl: string) => void;
   setProvider: (provider: LlmProvider) => void;
   setModel: (model: string) => void;
   setThinking: (thinking: boolean) => void;
+  setTranslateInput: (translateInput: boolean) => void;
   setAvailableModels: (models: string[]) => void;
   setBackendPref: (backend: BackendKey, field: keyof BackendPrefs, value: string) => void;
   setBackendPrefs: (backend: BackendKey, prefs: Partial<BackendPrefs>) => void;
@@ -133,13 +136,13 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
-      nickname: "",
       systemPrompt: "",
       apiKey: "",
       apiBaseUrl: "https://api.deepseek.com/v1",
       provider: "deepseek",
       model: "deepseek-v4-flash",
       thinking: false,
+      translateInput: false,
       availableModels: [],
       backends: {
         "claude-code": emptyBackendPrefs(),
@@ -148,13 +151,13 @@ export const useSettingsStore = create<SettingsState>()(
       },
       isSettingsModalOpen: false,
 
-      setNickname: (nickname) => set({ nickname }),
       setSystemPrompt: (systemPrompt) => set({ systemPrompt }),
       setApiKey: (apiKey) => set({ apiKey }),
       setApiBaseUrl: (apiBaseUrl) => set({ apiBaseUrl }),
       setProvider: (provider) => set({ provider }),
       setModel: (model) => set({ model }),
       setThinking: (thinking) => set({ thinking }),
+      setTranslateInput: (translateInput) => set({ translateInput }),
       setAvailableModels: (availableModels) => set({ availableModels }),
       setBackendPref: (backend, field, value) =>
         set((state) => ({
@@ -176,13 +179,13 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: "agent-settings-storage",
       partialize: (state) => ({
-        nickname: state.nickname,
         systemPrompt: state.systemPrompt,
         apiKey: state.apiKey,
         apiBaseUrl: state.apiBaseUrl,
         provider: state.provider,
         model: state.model,
         thinking: state.thinking,
+        translateInput: state.translateInput,
         availableModels: state.availableModels,
         backends: state.backends,
       }),
