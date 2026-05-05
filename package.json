@@ -4,18 +4,19 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri dev",
+    "dev": "node scripts/run-tauri.mjs dev",
     "dev:web": "vite",
-    "build": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build",
+    "prebuild": "npm run prepare:runtime",
+    "build": "node scripts/run-tauri.mjs build",
     "build:web": "vite build",
     "preview": "vite preview",
-    "tauri": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri",
+    "tauri": "node scripts/run-tauri.mjs",
     "typecheck": "tsc -b --noEmit",
-    "check:rust": "cd src-tauri && PATH=\"$HOME/.cargo/bin:$PATH\" cargo check",
-    "fmt:rust": "cd src-tauri && PATH=\"$HOME/.cargo/bin:$PATH\" cargo fmt",
-    "lint:rust": "cd src-tauri && PATH=\"$HOME/.cargo/bin:$PATH\" cargo clippy --all-targets -- -D warnings",
+    "check:rust": "node scripts/run-cargo.mjs check",
+    "fmt:rust": "node scripts/run-cargo.mjs fmt",
+    "lint:rust": "node scripts/run-cargo.mjs clippy --all-targets -- -D warnings",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
-    "clean": "rm -rf dist src-tauri/target src-tauri/resources/runtime"
+    "clean": "node -e \"const fs=require('node:fs');for(const p of ['dist','src-tauri/target','src-tauri/resources/runtime']){fs.rmSync(p,{recursive:true,force:true})}\""
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.4",

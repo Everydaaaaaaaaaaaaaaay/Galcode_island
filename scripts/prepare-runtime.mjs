@@ -17,7 +17,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -158,6 +158,18 @@ async function prepareClaude(tmpDir) {
 async function main() {
   console.log(`Preparing runtime for ${runtimeKey} → ${path.relative(rootDir, runtimeDir)}`);
 
+  // 无条件创建 runtime 目录 + 写一个占位文件。
+  // 原因：tauri.conf.json 的 bundle.resources 配的 glob `resources/runtime/**/*`
+  // 在 tauri-build 阶段必须匹配到至少一个文件；fresh clone 后该目录不存在，
+  // 即便所有 CLI 都安装失败，至少有这个占位让 cargo build 不挂。
+  // 占位文件本身不入库（整个 runtime 目录被 .gitignore），bundle 时会被
+  // 一起打进去（几十字节，无害）。
+  await ensureDir(runtimeDir);
+  await writeFile(
+    path.join(runtimeDir, ".keep"),
+    "tauri bundle.resources glob placeholder; safe to delete after a successful CLI stage.\n",
+  );
+
   // 临时安装目录用 OS tmp，避免污染主项目
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "galcode-runtime-"));
   console.log(`(tmp install: ${tmpDir})`);
@@ -177,12 +189,17 @@ async function main() {
         console.error(`  ✗ ${name} failed: ${error.message}`);
       }
     }
+    // 不 throw：即便全失败，bundle 出来的 .exe 仍可 fallback 到 PATH 上
+    // 用户全局安装的 CLI（resolve_*_binary 会查 PATH）。失败只 warn，让
+    // 后续 build 能继续；用户从产出 dmg/msi 启动时如果 PATH 也没有再报错。
     if (failed === tasks.length) {
-      throw new Error("All runtime preparations failed");
-    }
-    if (failed > 0) {
+      console.warn(
+        `\n⚠ All ${tasks.length} runtime preparations failed. Bundle 不会包含任何 CLI binary —— ` +
+          `产出的 .app/.exe 启动后只能依赖用户全局安装的 claude / codex / opencode（系统 PATH 上）。`,
+      );
+    } else if (failed > 0) {
       console.log(
-        `\nDone with ${failed}/${tasks.length} failures. Bundle 会缺这些 CLI 的 binary，用户需要自己装。`
+        `\nDone with ${failed}/${tasks.length} failures. Bundle 会缺这些 CLI 的 binary，用户需要自己装。`,
       );
     } else {
       console.log("\nDone.");
