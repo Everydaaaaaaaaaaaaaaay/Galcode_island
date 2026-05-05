@@ -7,6 +7,7 @@ import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppStore } from "../../stores/useAppStore";
 import { useUiStore } from "../../stores/useUiStore";
 import { useTabsStore } from "../../stores/useTabsStore";
+import { useProfileStore } from "../../stores/useProfileStore";
 import { ProjectTree } from "./ProjectTree";
 import { HistoryList } from "./HistoryList";
 
@@ -39,6 +40,8 @@ function MenuButton({ label, icon, onClick, active }: MenuButtonProps): JSX.Elem
 
 export function SidebarLeft(): JSX.Element {
   const openSettingsModal = useSettingsStore((s) => s.openSettingsModal);
+  const openProfileModal = useProfileStore((s) => s.openProfileModal);
+  const profileNickname = useProfileStore((s) => s.nickname);
   const theme = useAppStore((s) => s.theme);
   const toggleTheme = useAppStore((s) => s.toggleTheme);
   const leftSidebarView = useUiStore((s) => s.leftSidebarView);
@@ -119,7 +122,8 @@ export function SidebarLeft(): JSX.Element {
           }
         />
         <MenuButton
-          label="个人档案"
+          label={profileNickname.trim() ? `个人档案 · ${profileNickname.slice(0, 8)}` : "个人档案"}
+          onClick={openProfileModal}
           icon={
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className="h-3.5 w-3.5">
               <circle cx="8" cy="6" r="2.5" />

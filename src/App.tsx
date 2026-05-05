@@ -5,6 +5,7 @@ import { GlobalTopBar } from "./components/GlobalTopBar";
 import { MainView } from "./components/MainView";
 import { WelcomeView } from "./components/welcome/WelcomeView";
 import { SettingsModal } from "./components/settings/SettingsModal";
+import { ProfileModal } from "./components/profile/ProfileModal";
 import { SidebarLeft } from "./components/sidebar/SidebarLeft";
 import { SidebarRight } from "./components/sidebar/SidebarRight";
 import { useAgentIPC } from "./hooks/useAgentIPC";
@@ -13,6 +14,7 @@ import { useTabsReattach } from "./hooks/useTabsReattach";
 import { useThemeHotkey } from "./hooks/useThemeHotkey";
 import { useAppStore } from "./stores/useAppStore";
 import { useSettingsStore } from "./stores/useSettingsStore";
+import { useProfileStore } from "./stores/useProfileStore";
 
 function App(): JSX.Element {
   const isStarted = useAppStore((state) => state.isStarted);
@@ -24,13 +26,15 @@ function App(): JSX.Element {
 
   useEffect(() => {
     const state = useSettingsStore.getState();
+    const profile = useProfileStore.getState();
 
     // 启动时把 persist 出来的 LLM + 三个 backend 偏好同步给 Rust 端的内存单例。
     // Rust 端 OnceLock<Mutex<...>> 进程重启就空——前端 zustand persist 是真相之源。
+    // nickname 在 useProfileStore 里管理（个人档案），其它在 useSettingsStore。
     invoke("update_llm_settings", {
       baseUrl: state.apiBaseUrl,
       apiKey: state.apiKey,
-      nickname: state.nickname,
+      nickname: profile.nickname,
       systemPrompt: state.systemPrompt,
       provider: state.provider,
       model: state.model,
@@ -133,6 +137,7 @@ function App(): JSX.Element {
           </motion.div>
         </AnimatePresence>
         <SettingsModal />
+        <ProfileModal />
       </div>
     </main>
   );

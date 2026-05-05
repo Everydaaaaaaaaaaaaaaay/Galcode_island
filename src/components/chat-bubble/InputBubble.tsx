@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../../stores/useAppStore";
-import { useSettingsStore } from "../../stores/useSettingsStore";
+import { useProfileStore } from "../../stores/useProfileStore";
 import { useActiveTab, useActiveTabActions } from "../../hooks/useActiveTab";
 
 const GREETINGS = [
@@ -14,7 +14,7 @@ const GREETINGS = [
 ];
 
 export function InputBubble(): JSX.Element {
-  const nickname = useSettingsStore((s) => s.nickname);
+  const nickname = useProfileStore((s) => s.nickname);
   const displayNickname = nickname.trim() ? nickname : "部员";
   const addLogEntry = useAppStore((s) => s.addLogEntry);
 

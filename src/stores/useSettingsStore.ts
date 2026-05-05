@@ -98,7 +98,7 @@ export function getProviderPreset(id: LlmProvider): ProviderPreset {
 }
 
 interface SettingsState {
-  nickname: string;
+  // nickname 已搬到 useProfileStore，不再放这里
   systemPrompt: string;
   apiKey: string;
   apiBaseUrl: string;
@@ -116,7 +116,6 @@ interface SettingsState {
   isSettingsModalOpen: boolean;
 
   // Actions
-  setNickname: (nickname: string) => void;
   setSystemPrompt: (systemPrompt: string) => void;
   setApiKey: (apiKey: string) => void;
   setApiBaseUrl: (apiBaseUrl: string) => void;
@@ -133,7 +132,6 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
-      nickname: "",
       systemPrompt: "",
       apiKey: "",
       apiBaseUrl: "https://api.deepseek.com/v1",
@@ -148,7 +146,6 @@ export const useSettingsStore = create<SettingsState>()(
       },
       isSettingsModalOpen: false,
 
-      setNickname: (nickname) => set({ nickname }),
       setSystemPrompt: (systemPrompt) => set({ systemPrompt }),
       setApiKey: (apiKey) => set({ apiKey }),
       setApiBaseUrl: (apiBaseUrl) => set({ apiBaseUrl }),
@@ -176,7 +173,6 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: "agent-settings-storage",
       partialize: (state) => ({
-        nickname: state.nickname,
         systemPrompt: state.systemPrompt,
         apiKey: state.apiKey,
         apiBaseUrl: state.apiBaseUrl,

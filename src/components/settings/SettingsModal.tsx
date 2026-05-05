@@ -6,6 +6,7 @@ import {
   useSettingsStore,
   type LlmProvider,
 } from "../../stores/useSettingsStore";
+import { useProfileStore } from "../../stores/useProfileStore";
 import { AgentBackendsSection } from "./AgentBackendsSection";
 
 import { invoke } from "@tauri-apps/api/core";
@@ -17,7 +18,9 @@ export function SettingsModal(): JSX.Element {
   const isSettingsModalOpen = useSettingsStore((s) => s.isSettingsModalOpen);
   const closeSettingsModal = useSettingsStore((s) => s.closeSettingsModal);
 
-  const nickname = useSettingsStore((s) => s.nickname);
+  // nickname 现在在 useProfileStore 里管理（个人档案）；保存时仍要传给后端
+  // LLM system prompt，所以这里只读不写。
+  const nickname = useProfileStore((s) => s.nickname);
   const systemPrompt = useSettingsStore((s) => s.systemPrompt);
   const apiKey = useSettingsStore((s) => s.apiKey);
   const apiBaseUrl = useSettingsStore((s) => s.apiBaseUrl);
@@ -26,7 +29,6 @@ export function SettingsModal(): JSX.Element {
   const thinking = useSettingsStore((s) => s.thinking);
   const availableModels = useSettingsStore((s) => s.availableModels);
 
-  const setNickname = useSettingsStore((s) => s.setNickname);
   const setSystemPrompt = useSettingsStore((s) => s.setSystemPrompt);
   const setApiKey = useSettingsStore((s) => s.setApiKey);
   const setApiBaseUrl = useSettingsStore((s) => s.setApiBaseUrl);
@@ -35,7 +37,6 @@ export function SettingsModal(): JSX.Element {
   const setThinking = useSettingsStore((s) => s.setThinking);
   const setAvailableModels = useSettingsStore((s) => s.setAvailableModels);
 
-  const [localNickname, setLocalNickname] = React.useState(nickname);
   const [localSystemPrompt, setLocalSystemPrompt] = React.useState(systemPrompt);
   const [localApiKey, setLocalApiKey] = React.useState(apiKey);
   const [localApiBaseUrl, setLocalApiBaseUrl] = React.useState(apiBaseUrl);
@@ -50,7 +51,6 @@ export function SettingsModal(): JSX.Element {
 
   React.useEffect(() => {
     if (isSettingsModalOpen) {
-      setLocalNickname(nickname);
       setLocalSystemPrompt(systemPrompt);
       setLocalApiKey(apiKey);
       setLocalApiBaseUrl(apiBaseUrl);
@@ -62,7 +62,6 @@ export function SettingsModal(): JSX.Element {
     }
   }, [
     isSettingsModalOpen,
-    nickname,
     systemPrompt,
     apiKey,
     apiBaseUrl,
@@ -118,7 +117,6 @@ export function SettingsModal(): JSX.Element {
   };
 
   const handleSave = async () => {
-    setNickname(localNickname);
     setSystemPrompt(localSystemPrompt);
     setApiKey(localApiKey);
     setApiBaseUrl(localApiBaseUrl);
@@ -130,7 +128,8 @@ export function SettingsModal(): JSX.Element {
       await invoke("update_llm_settings", {
         baseUrl: localApiBaseUrl,
         apiKey: localApiKey,
-        nickname: localNickname,
+        // nickname 走 ProfileStore，保存时直接读最新值（即便用户没动也不影响）
+        nickname,
         systemPrompt: localSystemPrompt,
         provider: localProvider,
         model: localModel,
@@ -171,19 +170,6 @@ export function SettingsModal(): JSX.Element {
 
               <div className="flex flex-col gap-6 overflow-y-auto px-6 py-5">
                 <section className="flex flex-col gap-5">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                      希望团长怎样称呼你？
-                    </label>
-                    <input
-                      type="text"
-                      value={localNickname}
-                      onChange={(e) => setLocalNickname(e.target.value)}
-                      placeholder="例如：部员 / 阿虚"
-                      className={inputCls}
-                    />
-                  </div>
-
                   <div className="flex flex-col gap-1.5">
                     <label className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
                       你想跟团长说的悄悄话（系统提示词）：
