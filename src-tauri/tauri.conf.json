@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "galcode_island",
   "version": "0.1.0",
-  "identifier": "com.shiju.galcode_island",
+  "identifier": "com.shiju.galcode-island",
   "build": {
     "beforeDevCommand": "npm run dev:web",
     "devUrl": "http://localhost:1420",
