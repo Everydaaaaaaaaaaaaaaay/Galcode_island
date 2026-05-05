@@ -6,6 +6,11 @@ import { useSettingsStore } from "../stores/useSettingsStore";
 import { useActiveTab, useActiveTabActions } from "../hooks/useActiveTab";
 import { TabBar } from "./TabBar";
 
+/// macOS 上启用了原生 traffic lights（左上红绿灯）负责 关窗/最小化/最大化，
+/// 自画的 −/□/× 三连按钮在 mac 上隐藏避免重复；其他平台 borderless 仍需自画。
+const isMacOS = typeof navigator !== "undefined"
+  && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "");
+
 export function GlobalTopBar(): JSX.Element {
   const theme = useAppStore((s) => s.theme);
   const toggleTheme = useAppStore((s) => s.toggleTheme);
@@ -102,30 +107,37 @@ export function GlobalTopBar(): JSX.Element {
             </svg>
           )}
         </button>
-        <button
-          type="button"
-          onClick={async () => { try { await appWindow.minimize(); } catch (error) { console.error("Failed to minimize", error); } }}
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/10 text-sm text-zinc-600 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/20 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/20"
-          aria-label="最小化窗口"
-        >
-          -
-        </button>
-        <button
-          type="button"
-          onClick={async () => { try { await appWindow.toggleMaximize(); } catch (error) { console.error("Failed to toggle maximize", error); } }}
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/10 text-xs text-zinc-600 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/20 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/20"
-          aria-label="最大化窗口"
-        >
-          □
-        </button>
-        <button
-          type="button"
-          onClick={async () => { try { await appWindow.close(); } catch (error) { console.error("Failed to close", error); } }}
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-400/15 text-sm text-rose-500 transition-all duration-200 hover:-translate-y-0.5 hover:bg-rose-400/25 dark:text-rose-300"
-          aria-label="关闭窗口"
-        >
-          ×
-        </button>
+        {/* macOS 下原生 traffic lights 已覆盖最小化/最大化/关闭，自画的三连
+            按钮隐藏避免重复（保留 设置/主题/停止 这些 traffic lights 没有
+            的功能按钮）。其他平台 borderless 仍需自画窗口控制。 */}
+        {!isMacOS && (
+          <>
+            <button
+              type="button"
+              onClick={async () => { try { await appWindow.minimize(); } catch (error) { console.error("Failed to minimize", error); } }}
+              className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/10 text-sm text-zinc-600 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/20 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/20"
+              aria-label="最小化窗口"
+            >
+              -
+            </button>
+            <button
+              type="button"
+              onClick={async () => { try { await appWindow.toggleMaximize(); } catch (error) { console.error("Failed to toggle maximize", error); } }}
+              className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/10 text-xs text-zinc-600 transition-all duration-200 hover:-translate-y-0.5 hover:bg-black/20 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/20"
+              aria-label="最大化窗口"
+            >
+              □
+            </button>
+            <button
+              type="button"
+              onClick={async () => { try { await appWindow.close(); } catch (error) { console.error("Failed to close", error); } }}
+              className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-400/15 text-sm text-rose-500 transition-all duration-200 hover:-translate-y-0.5 hover:bg-rose-400/25 dark:text-rose-300"
+              aria-label="关闭窗口"
+            >
+              ×
+            </button>
+          </>
+        )}
       </div>
     </header>
   );

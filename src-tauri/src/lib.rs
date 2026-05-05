@@ -66,6 +66,20 @@ pub fn run() {
             // 避免端口被占用或重复消耗 token。
             agent::sysutils::cleanup_stale_runtime_orphans(&handle);
 
+            // macOS 原生顶栏（左上红绿灯）：tauri.conf.json 主配置 decorations=false
+            // 让 Windows/Linux 保持完全 borderless（用我们自画的 GlobalTopBar）；
+            // macOS 单独打开 decorations 才会显示 traffic lights。配合 conf.json
+            // 里 macOS-only 的 titleBarStyle=Overlay + hiddenTitle，红绿灯浮在
+            // 透明窗口左上角，不占用一整行原生 title bar 高度，圆角/磨砂玻璃保留。
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(win) = app.get_webview_window("main") {
+                    if let Err(e) = win.set_decorations(true) {
+                        log::warn!("macOS set_decorations(true) failed: {e}");
+                    }
+                }
+            }
+
             ipc::tray::setup_tray(app).map_err(|e| {
                 log::warn!("tray setup skipped: {}", e);
                 e
