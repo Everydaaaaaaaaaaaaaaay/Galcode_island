@@ -718,6 +718,28 @@ fn translate_input(llm: &Option<LlmConfig>, zh: &str) -> String {
     }
 }
 
+/// 启发式判断：文本里 CJK 汉字占非空白字符的比例 > 30% 即视为中文。
+/// 用在 translate_input=true 但仓库内容是中文、agent 实际输出中文的场景：
+/// 跳过 translate_en_to_zh 节省一次 LLM 调用 + 避免把中文再翻一遍引入失真。
+pub(crate) fn is_likely_chinese(text: &str) -> bool {
+    let mut cjk = 0usize;
+    let mut total = 0usize;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        total += 1;
+        // CJK Unified Ideographs + Extension A + Compatibility Ideographs
+        if matches!(ch as u32, 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF) {
+            cjk += 1;
+        }
+    }
+    if total < 8 {
+        return false;
+    }
+    cjk * 10 > total * 3
+}
+
 /// 翻译 + 总结的核心计算（纯函数，不动 state / 不 emit）。
 /// 拿英文原文 + 用户中文 prompt + LLM 配置，跑并发翻译 + 总结，输出
 /// session-complete payload 所需的全部字段。
@@ -753,7 +775,11 @@ pub(crate) fn compute_finalize_outcome(
                 generate_agent_summary(&cfg_summary, &user_zh_owned, &result_for_summary)
             });
 
-            let translated = if cfg.translate_input {
+            // translate_input=true 且 agent 实际输出不是中文时才翻译。
+            // 仓库内容是中文 / agent 直接 quote 中文文件 → 输出可能是中文，
+            // 这种情况跳过翻译省一次 LLM 调用，且避免把中文再翻一遍引入失真。
+            let need_out_translate = cfg.translate_input && !is_likely_chinese(result_en);
+            let translated = if need_out_translate {
                 let cfg_translate = cfg.clone();
                 let result_for_translate = result_en.to_string();
                 let result_en_fallback = result_en.to_string();
@@ -766,7 +792,7 @@ pub(crate) fn compute_finalize_outcome(
                     .and_then(|r| r.ok())
                     .unwrap_or(result_en_fallback)
             } else {
-                // 没启用输入翻译：agent 输出本就是用户的语言（通常中文），直接用
+                // 没启用输入翻译 / agent 输出已经是中文：直接用，不再翻译
                 result_en.to_string()
             };
             let summary = h_summary.join().ok().and_then(|r| match r {
@@ -774,9 +800,10 @@ pub(crate) fn compute_finalize_outcome(
                 Err(e) => Some(Err(e)),
             });
             eprintln!(
-                "[finalize] parallel translate_out + summary done in {}ms (translate_input={})",
+                "[finalize] parallel translate_out + summary done in {}ms (translate_input={}, did_translate_out={})",
                 t_parallel.elapsed().as_millis(),
                 cfg.translate_input,
+                need_out_translate,
             );
             (translated, summary)
         }
