@@ -956,6 +956,9 @@ pub fn lan_get_storage(
 
 /// 写入并广播。`source` 是写入方的 clientId（前端 sharedStorage.ts 生成的随机值），
 /// 其它客户端收到广播时会比对 source 跳过自己的回声。
+///
+/// 性能：高频 set（agent 流式时 ~10Hz）只更新内存 HashMap + emit 实时事件，
+/// 写盘走 800ms debounce —— 同 key/不同 key 多次 set 在窗口内合并为一次 IO。
 #[tauri::command]
 pub fn lan_set_storage(
     app: AppHandle,
@@ -967,21 +970,12 @@ pub fn lan_set_storage(
     use tauri::Emitter;
     {
         let mut map = lan.shared_storage.lock().map_err(|e| e.to_string())?;
-        // 短路：值没变就不广播 / 不落盘，避免桌面端 zustand 里"看起来等价但 JSON
+        // 短路：值没变就不广播 / 不调度落盘，避免桌面端 zustand 里"看起来等价但 JSON
         // 序列化字节序略有差异"的 setState 反复造成无意义事件
         if map.get(&key).map(|v| v == &value).unwrap_or(false) {
             return Ok(());
         }
         map.insert(key.clone(), value.clone());
-        // 锁释放前快照一份给落盘
-        let snapshot = map.clone();
-        drop(map);
-        let app_for_save = app.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = crate::lan::shared_storage::save(&app_for_save, &snapshot) {
-                log::warn!("[lan] save shared storage failed: {e}");
-            }
-        });
     }
     let _ = app.emit(
         "storage://changed",
@@ -991,6 +985,7 @@ pub fn lan_set_storage(
             "source": source.unwrap_or_default(),
         }),
     );
+    crate::lan::shared_storage::schedule_save(&app, lan.inner());
     Ok(())
 }
 
@@ -1008,14 +1003,6 @@ pub fn lan_remove_storage(
             return Ok(());
         }
         map.remove(&key);
-        let snapshot = map.clone();
-        drop(map);
-        let app_for_save = app.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = crate::lan::shared_storage::save(&app_for_save, &snapshot) {
-                log::warn!("[lan] save shared storage failed: {e}");
-            }
-        });
     }
     let _ = app.emit(
         "storage://removed",
@@ -1024,5 +1011,6 @@ pub fn lan_remove_storage(
             "source": source.unwrap_or_default(),
         }),
     );
+    crate::lan::shared_storage::schedule_save(&app, lan.inner());
     Ok(())
 }

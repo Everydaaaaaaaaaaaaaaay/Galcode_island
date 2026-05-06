@@ -13,9 +13,13 @@
 //   - setItem 时 invoke("lan_set_storage", ...)，源标记为自己 clientId；
 //     广播事件回来时按 source 比对避免自己 hydrate 自己的写入造成抖动。
 
+use crate::lan::state::LanRuntimeState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -58,4 +62,40 @@ pub fn save(app: &AppHandle, entries: &HashMap<String, String>) -> Result<(), St
     std::fs::write(&tmp, &bytes).map_err(|e| format!("写 lan-storage.json.tmp 失败: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("rename lan-storage.json 失败: {e}"))?;
     Ok(())
+}
+
+/// 写盘 debounce 全局代数：每次 schedule_save 加 1，定时器到期时若代数已变更说明
+/// 后面又有新写入，跳过本次落盘交给后到的写入。这样 N 次高频 set 只会触发 1 次
+/// 写盘。zustand setState 在 agent 跑流式块时频率可达 10Hz，原本每次都 spawn
+/// 线程做整个 JSON 序列化 + tmp 写 + rename 太重；800ms debounce 把它压到 ≤ 1Hz。
+const SAVE_DEBOUNCE_MS: u64 = 800;
+static SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// 安排一次延迟写盘。多次连续调用只让最后一次到期时真正写盘。
+/// 内存 HashMap 由 caller 在调本函数前已经更新（移动端 invoke `lan_get_storage`
+/// 立刻能拿到最新值，不依赖落盘）；落盘只是为了重启后恢复。
+pub fn schedule_save(app: &AppHandle, lan: &Arc<LanRuntimeState>) {
+    let my_gen = SAVE_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    let app_cloned = app.clone();
+    let storage = lan.shared_storage.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(SAVE_DEBOUNCE_MS)).await;
+        // 代数已变 → 后面有人接力写，跳过
+        if SAVE_GENERATION.load(Ordering::Relaxed) != my_gen {
+            return;
+        }
+        // 拿快照（持锁时间最短，避免阻塞其它 invoke）
+        let snapshot = match storage.lock() {
+            Ok(m) => m.clone(),
+            Err(_) => return,
+        };
+        // 文件 IO 用 spawn_blocking 不占 tokio worker
+        let app_for_save = app_cloned.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            if let Err(e) = save(&app_for_save, &snapshot) {
+                log::warn!("[lan] save shared storage failed: {e}");
+            }
+        })
+        .await;
+    });
 }
