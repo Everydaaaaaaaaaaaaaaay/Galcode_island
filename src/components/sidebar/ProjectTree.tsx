@@ -15,6 +15,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useMemo } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { useTabsStore, type TabState } from "../../stores/useTabsStore";
+import { useNow } from "../../hooks/useNow";
 
 const NO_DIR_KEY = "__no_dir__";
 
@@ -53,9 +54,9 @@ function basename(p: string): string {
   return parts[parts.length - 1] || p;
 }
 
-function relativeTime(ms: number): string {
+function relativeTime(ms: number, now: number): string {
   if (!ms) return "—";
-  const diff = Date.now() - ms;
+  const diff = now - ms;
   if (diff < 60_000) return "刚刚";
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
@@ -74,11 +75,12 @@ function isTabRunning(tab: TabState): boolean {
 interface ProjectCardProps {
   tab: TabState;
   isActive: boolean;
+  now: number;
   onSelect: () => void;
   onClose: () => void;
 }
 
-function ProjectCard({ tab, isActive, onSelect, onClose }: ProjectCardProps): JSX.Element {
+function ProjectCard({ tab, isActive, now, onSelect, onClose }: ProjectCardProps): JSX.Element {
   const running = isTabRunning(tab);
   // 摘要标题优先级：lastUserPrompt（最近一次提问）→ task（草稿）→ title → "新会话"
   const summary =
@@ -118,7 +120,7 @@ function ProjectCard({ tab, isActive, onSelect, onClose }: ProjectCardProps): JS
             {summary}
           </div>
           <div className="mt-0.5 text-[10px] tracking-wide text-zinc-400 dark:text-zinc-500">
-            {tab.agent} · {relativeTime(tab.lastActiveAt || tab.createdAt)}
+            {tab.agent} · {relativeTime(tab.lastActiveAt || tab.createdAt, now)}
           </div>
         </div>
       </div>
@@ -153,6 +155,8 @@ export function ProjectTree(): JSX.Element {
   const addLogEntry = useAppStore((s) => s.addLogEntry);
 
   const groups = useMemo(() => groupTabsByDirectory(tabs, order), [tabs, order]);
+  // 订阅墙上时钟，让"X 分钟前"在窗口长期闲置时也按 30s 自动刷新（不靠用户点击触发）
+  const now = useNow();
 
   const handleCloseTab = async (id: string): Promise<void> => {
     const tab = tabs[id];
@@ -235,6 +239,7 @@ export function ProjectTree(): JSX.Element {
                 key={tab.id}
                 tab={tab}
                 isActive={activeTabId === tab.id}
+                now={now}
                 onSelect={() => setActiveTab(tab.id)}
                 onClose={() => void handleCloseTab(tab.id)}
               />

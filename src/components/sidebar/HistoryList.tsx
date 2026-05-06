@@ -9,6 +9,7 @@ import { useMemo } from "react";
 import { useTabsStore, type ArchivedSession } from "../../stores/useTabsStore";
 import { useUiStore } from "../../stores/useUiStore";
 import { useAppStore } from "../../stores/useAppStore";
+import { useNow } from "../../hooks/useNow";
 
 function basename(p: string | null): string {
   if (!p) return "未选择目录";
@@ -16,9 +17,9 @@ function basename(p: string | null): string {
   return parts[parts.length - 1] || p;
 }
 
-function relativeTime(ms: number): string {
+function relativeTime(ms: number, now: number): string {
   if (!ms) return "—";
-  const diff = Date.now() - ms;
+  const diff = now - ms;
   if (diff < 60_000) return "刚刚";
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
@@ -27,11 +28,12 @@ function relativeTime(ms: number): string {
 
 interface HistoryRowProps {
   item: ArchivedSession;
+  now: number;
   onRestore: () => void;
   onDelete: () => void;
 }
 
-function HistoryRow({ item, onRestore, onDelete }: HistoryRowProps): JSX.Element {
+function HistoryRow({ item, now, onRestore, onDelete }: HistoryRowProps): JSX.Element {
   return (
     <div
       onClick={onRestore}
@@ -52,7 +54,7 @@ function HistoryRow({ item, onRestore, onDelete }: HistoryRowProps): JSX.Element
             {item.summary}
           </div>
           <div className="mt-0.5 truncate text-[10px] tracking-wide text-zinc-400 dark:text-zinc-500">
-            {basename(item.projectPath)} · {item.agent} · {relativeTime(item.closedAt)}
+            {basename(item.projectPath)} · {item.agent} · {relativeTime(item.closedAt, now)}
           </div>
         </div>
       </div>
@@ -86,6 +88,7 @@ export function HistoryList(): JSX.Element {
     () => history.slice().sort((a, b) => b.closedAt - a.closedAt),
     [history],
   );
+  const now = useNow();
 
   const handleRestore = (id: string): void => {
     const newId = restoreFromHistory(id);
@@ -128,6 +131,7 @@ export function HistoryList(): JSX.Element {
           <HistoryRow
             key={item.id}
             item={item}
+            now={now}
             onRestore={() => handleRestore(item.id)}
             onDelete={() => removeFromHistory(item.id)}
           />
