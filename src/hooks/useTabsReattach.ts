@@ -16,7 +16,7 @@
 // 重启后 ResultCard 仍然会显示上次的 emotionText / summaryTranslation /
 // suggestionOptions（因为这些字段持久化了），用户能从那里继续。
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/bridge";
 import { useEffect } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import { useTabsStore } from "../stores/useTabsStore";
@@ -64,9 +64,21 @@ export function useTabsReattach(): void {
       reconcileWithBackendSessions(sessions);
       resumePendingFinalize();
     };
-    void run();
+
+    // 等 zustand persist async hydrate 完再跑 reconcile：sharedStorage 走 IPC，
+    // 启动一刻 store 是空的；如果 reattach 看到空 tabs 会误判前端没有持久化任务。
+    let unsubFinishHydration: (() => void) | undefined;
+    if (useTabsStore.persist.hasHydrated()) {
+      void run();
+    } else {
+      unsubFinishHydration = useTabsStore.persist.onFinishHydration(() => {
+        if (!cancelled) void run();
+      });
+    }
+
     return () => {
       cancelled = true;
+      unsubFinishHydration?.();
     };
   }, []);
 }

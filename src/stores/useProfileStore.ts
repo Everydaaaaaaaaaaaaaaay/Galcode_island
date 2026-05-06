@@ -9,7 +9,8 @@
 // 其他字段先持久化备用，未来可让凉宫春日按性格类型调语气。
 
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
+import { persist } from "zustand/middleware";
+import { createSharedStorage, onStorageExternalChange } from "../lib/sharedStorage";
 
 export type Gender = "male" | "female" | "other" | "undisclosed";
 export type AgeBand = "under18" | "18-25" | "26-35" | "36-45" | "46plus" | "undisclosed";
@@ -63,7 +64,7 @@ export const useProfileStore = create<ProfileState>()(
     {
       name: "agent-profile-storage",
       version: 1,
-      storage: createJSONStorage(() => localStorage),
+      storage: createSharedStorage(),
       partialize: (state) =>
         ({
           nickname: state.nickname,
@@ -93,3 +94,9 @@ export const useProfileStore = create<ProfileState>()(
     },
   ),
 );
+
+// 当其它客户端（桌面端 / 别的移动端）改了 profile 后，后端会广播 storage://changed
+// 事件给我们；这里订阅一下让本端 store 跟着 rehydrate。
+onStorageExternalChange("agent-profile-storage", () => {
+  void useProfileStore.persist.rehydrate();
+});

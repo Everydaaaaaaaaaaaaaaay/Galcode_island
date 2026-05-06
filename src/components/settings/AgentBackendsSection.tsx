@@ -4,7 +4,7 @@
 // 状态条 chip 颜色：installed 绿、loggedIn 绿、未登录黄、未装红、loading 蓝。
 // verify/login/start 之类操作完成后内联显示 toast（成功提示 / 错误信息）。
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/bridge";
 import { Component, useCallback, useEffect, useState, type ErrorInfo, type ReactNode } from "react";
 import { useBackendStatus } from "../../hooks/useBackendStatus";
 import {

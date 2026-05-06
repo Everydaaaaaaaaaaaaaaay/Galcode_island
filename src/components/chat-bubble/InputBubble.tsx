@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, type KeyboardEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/bridge";
 import { useAppStore } from "../../stores/useAppStore";
 import { useProfileStore } from "../../stores/useProfileStore";
 import { useTabsStore } from "../../stores/useTabsStore";
 import { useActiveTab, useActiveTabActions } from "../../hooks/useActiveTab";
+import { PetCharacter } from "../pet-character/PetCharacter";
 
 const GREETINGS = [
   "喂，[称呼]，发什么呆呢？今天的部团活动要开始咯，有什么有趣的企划快交上来看看。",
@@ -118,6 +119,7 @@ export function InputBubble(): JSX.Element {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -10, scale: 0.95 }}
           transition={{ type: "spring", damping: 22, stiffness: 280 }}
+          // 自然高度，textarea 自身有 min-h 提供输入区
           className="relative w-full overflow-hidden rounded-[22px] rounded-bl-[6px] p-[2px] shadow-lg shadow-amber-500/10 dark:shadow-none"
         >
           {/* Faint amber base layer */}
@@ -126,9 +128,28 @@ export function InputBubble(): JSX.Element {
           {/* Spinning conic gradient glow — longer visible arc in light mode */}
           <div className="absolute top-[-50%] left-[-50%] h-[200%] w-[200%] animate-[spin_4s_linear_infinite] bg-[conic-gradient(from_0deg,transparent_60%,#fb923c_100%)] dark:bg-[conic-gradient(from_0deg,transparent_75%,#fb923c_100%)]" />
 
-          {/* Inner glass content container */}
-          <div className="relative flex h-full w-full flex-col rounded-[20px] rounded-bl-[4px] border border-white/60 bg-white/70 p-5 backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60">
-            <div className="mb-4 min-h-[3rem] text-[15px] font-medium leading-relaxed tracking-wide text-zinc-600 dark:text-zinc-300">
+          {/* Inner glass content container —— 自然高度，三段式（嵌入桌宠头部 /
+              textarea / 启动按钮）；textarea 自身 min-h 提供编辑区高度 */}
+          <div className="relative flex w-full flex-col gap-3 rounded-[20px] rounded-bl-[4px] border border-white/60 bg-white/70 p-3.5 backdrop-blur-2xl sm:p-5 dark:border-white/10 dark:bg-slate-800/60">
+            {/* 移动端嵌入式头部：左 桌宠 compact + 右 greeting 文字 */}
+            <div className="flex shrink-0 items-start gap-3 sm:hidden">
+              <div className="shrink-0">
+                <PetCharacter size="compact" />
+              </div>
+              <div className="min-h-[5rem] flex-1 self-stretch text-[14px] font-medium leading-relaxed tracking-wide text-zinc-600 dark:text-zinc-300">
+                {displayedGreeting}
+                {displayedGreeting.length < greeting.length && (
+                  <motion.span
+                    animate={{ opacity: [1, 0] }}
+                    transition={{ repeat: Infinity, duration: 0.8 }}
+                    className="ml-1 inline-block h-[14px] w-2 bg-sky-400/70 align-middle"
+                  />
+                )}
+              </div>
+            </div>
+
+            {/* 桌面端 greeting 单独行（移动端已嵌入头部） */}
+            <div className="hidden shrink-0 min-h-[3rem] text-[15px] font-medium leading-relaxed tracking-wide text-zinc-600 sm:block dark:text-zinc-300">
               {displayedGreeting}
               {displayedGreeting.length < greeting.length && (
                 <motion.span
@@ -143,7 +164,8 @@ export function InputBubble(): JSX.Element {
               value={task}
               onChange={(e) => update({ task: e.target.value })}
               placeholder="和团长对话……  (Enter 发送，Shift+Enter 换行)"
-              className="min-h-[100px] w-full resize-none rounded-xl border border-black/5 bg-white/50 p-3.5 text-sm text-zinc-800 outline-none transition-all placeholder:text-zinc-400 focus:border-sky-400/50 focus:bg-white/80 focus:ring-2 focus:ring-sky-400/15 dark:border-white/5 dark:bg-slate-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-sky-400/40 dark:focus:bg-slate-900/60 dark:focus:ring-sky-400/10"
+              // 移动端 min-h 100px 给足输入区；桌面端 min-h-[100px]
+              className="min-h-[100px] max-h-[40vh] w-full resize-none rounded-xl border border-black/5 bg-white/50 p-3 text-base text-zinc-800 outline-none transition-all placeholder:text-zinc-400 focus:border-sky-400/50 focus:bg-white/80 focus:ring-2 focus:ring-sky-400/15 sm:max-h-none sm:p-3.5 sm:text-sm dark:border-white/5 dark:bg-slate-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-sky-400/40 dark:focus:bg-slate-900/60 dark:focus:ring-sky-400/10"
               onCompositionStart={() => {
                 isComposingRef.current = true;
               }}
@@ -163,7 +185,7 @@ export function InputBubble(): JSX.Element {
               }}
             />
 
-            <div className="mt-4 flex items-center justify-end gap-3">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 sm:gap-3">
               {!projectPath && (
                 <span className="text-[11px] text-amber-600/90 dark:text-amber-300/90">
                   请先在顶部选择项目目录
@@ -174,7 +196,8 @@ export function InputBubble(): JSX.Element {
                 whileTap={{ scale: 0.98 }}
                 onClick={() => void handleLaunch()}
                 disabled={!task.trim() || !projectPath}
-                className="rounded-xl bg-sky-500 px-6 py-2.5 text-sm font-semibold tracking-wide text-white shadow-md shadow-sky-400/25 transition-all hover:bg-sky-600 hover:shadow-sky-400/40 active:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                // 移动端 px-7/py-3 = 44px+ 触控目标；桌面端保留原尺寸
+                className="min-h-[44px] rounded-xl bg-sky-500 px-7 py-3 text-[15px] font-semibold tracking-wide text-white shadow-md shadow-sky-400/25 transition-all hover:bg-sky-600 hover:shadow-sky-400/40 active:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:px-6 sm:py-2.5 sm:text-sm"
               >
                 启动
               </motion.button>

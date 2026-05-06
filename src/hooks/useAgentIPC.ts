@@ -14,7 +14,7 @@
 // 没有 sessionId / runId 的极早期事件触发。
 
 import { useEffect } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "../lib/bridge";
 import { useAppStore } from "../stores/useAppStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useTabsStore, type TabState } from "../stores/useTabsStore";

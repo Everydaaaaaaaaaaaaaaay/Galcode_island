@@ -11,6 +11,7 @@
 
 mod agent;
 mod ipc;
+mod lan;
 mod llm;
 mod session;
 mod window_utils;
@@ -20,7 +21,9 @@ use tauri::Manager;
 use ipc::commands::{
     claude_login_open, claude_models, claude_send_prompt, claude_status, claude_verify,
     codex_login_open, codex_send_prompt, codex_status, codex_verify, finalize_pending,
-    get_session_logs, list_llm_models, list_sessions, opencode_create_session,
+    get_session_logs, lan_clear_password, lan_get_state, lan_get_storage, lan_list_storage,
+    lan_remove_storage, lan_revoke_all_devices, lan_set_enabled, lan_set_password, lan_set_port,
+    lan_set_storage, lan_sync_projects, list_llm_models, list_sessions, opencode_create_session,
     opencode_list_providers, opencode_login_open, opencode_send_prompt, opencode_set_auth,
     opencode_start, opencode_status, opencode_stop, respond_permission, select_project_folder,
     set_click_through, start_agent, stop_agent, translate_only, update_backend_preferences,
@@ -59,6 +62,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(AppState::new()))
         .manage(Arc::new(agent::runtime::RuntimeState::default()))
+        .manage(Arc::new(lan::LanRuntimeState::default()))
         .setup(|app| {
             let handle = app.handle().clone();
             let state = app.state::<Arc<AppState>>();
@@ -67,6 +71,48 @@ pub fn run() {
             // 启动时清理上一轮崩溃 / 强退留下的 opencode/codex/claude 孤儿子进程，
             // 避免端口被占用或重复消耗 token。
             agent::sysutils::cleanup_stale_runtime_orphans(&handle);
+
+            // 把 Tauri emit 的核心事件 forward 到 LAN 事件总线（浏览器端 listen 用）
+            lan::event_bus::register_forwarders(&handle);
+
+            // 共享 storage 启动时从盘上加载到内存（重启后镜像不丢，移动端拉到非空数据）
+            {
+                let entries = lan::shared_storage::load(&handle);
+                if !entries.is_empty() {
+                    let storage_arc = handle
+                        .state::<Arc<lan::LanRuntimeState>>()
+                        .shared_storage
+                        .clone();
+                    let count = entries.len();
+                    let lock_result = storage_arc.lock();
+                    if let Ok(mut map) = lock_result {
+                        *map = entries;
+                        log::info!("[lan] loaded {count} shared-storage entries from disk");
+                    }
+                }
+            }
+
+            // 局域网 HTTP 服务：上次启用过且密码还在 → 启动恢复
+            // 失败不阻塞主流程，仅日志告警；用户可在设置里手动重新开启
+            {
+                let cfg = lan::config::load(&handle);
+                if cfg.enabled && cfg.has_password() {
+                    let lan_state = handle.state::<Arc<lan::LanRuntimeState>>();
+                    match lan::server::spawn_server(&handle, cfg.port) {
+                        Ok((running_port, thread, stop_flag)) => {
+                            if let Ok(mut s) = lan_state.server.lock() {
+                                s.thread = Some(thread);
+                                s.stop_flag = Some(stop_flag);
+                                s.running_port = Some(running_port);
+                            }
+                            log::info!("[lan] auto-resume HTTP server at :{running_port}");
+                        }
+                        Err(e) => {
+                            log::warn!("[lan] auto-resume failed: {e}");
+                        }
+                    }
+                }
+            }
 
             // macOS 原生顶栏（左上红绿灯）：tauri.conf.json 主配置 decorations=false
             // 让 Windows/Linux 保持完全 borderless（用我们自画的 GlobalTopBar）；
@@ -129,6 +175,18 @@ pub fn run() {
             opencode_set_auth,
             opencode_login_open,
             opencode_list_providers,
+            // 局域网移动端访问
+            lan_get_state,
+            lan_set_password,
+            lan_clear_password,
+            lan_set_port,
+            lan_set_enabled,
+            lan_revoke_all_devices,
+            lan_sync_projects,
+            lan_list_storage,
+            lan_get_storage,
+            lan_set_storage,
+            lan_remove_storage,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

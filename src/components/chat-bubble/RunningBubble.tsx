@@ -1,7 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/bridge";
 import { motion, AnimatePresence } from "framer-motion";
 import { useActiveTab, useActiveTabActions } from "../../hooks/useActiveTab";
 import { useAppStore } from "../../stores/useAppStore";
+import { PetCharacter } from "../pet-character/PetCharacter";
 
 export function RunningBubble(): JSX.Element {
   const tab = useActiveTab();
@@ -42,22 +43,35 @@ export function RunningBubble(): JSX.Element {
           {/* Spinning conic gradient glow — longer visible arc in light mode */}
           <div className="absolute top-[-50%] left-[-50%] h-[200%] w-[200%] animate-[spin_4s_linear_infinite] bg-[conic-gradient(from_0deg,transparent_60%,#fb923c_100%)] dark:bg-[conic-gradient(from_0deg,transparent_75%,#fb923c_100%)]" />
 
-          {/* Inner glass content container */}
-          <div className="relative flex h-full w-full flex-col rounded-[14px] border border-white/60 bg-white/70 p-4 backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60">
-            <div className="mb-2 flex items-center gap-2">
+          {/* Inner glass content container —— 自然高度三段式 */}
+          <div className="relative flex w-full flex-col gap-3 rounded-[14px] border border-white/60 bg-white/70 p-3 backdrop-blur-2xl sm:p-4 dark:border-white/10 dark:bg-slate-800/60">
+            {/* 顶部：状态徽章 + 停止 */}
+            <div className="flex shrink-0 items-center gap-2">
               <div className="h-2 w-2 rounded-full bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.5)] animate-pulse" />
-              <span className="text-xs font-bold uppercase tracking-wider text-sky-600 dark:text-sky-400">
+              <span className="truncate text-[11px] font-bold uppercase tracking-wider text-sky-600 sm:text-xs dark:text-sky-400">
                 Agent正在全力执行...
               </span>
               <button
                 type="button"
                 onClick={() => void handleStop()}
-                className="ml-auto flex h-6 items-center rounded-md bg-rose-400/15 px-2 text-[11px] font-medium text-rose-500 transition-all hover:-translate-y-0.5 hover:bg-rose-400/25 dark:text-rose-300"
+                className="ml-auto flex min-h-[32px] items-center rounded-md bg-rose-400/15 px-3 text-[12px] font-medium text-rose-500 transition-all hover:-translate-y-0.5 hover:bg-rose-400/25 sm:min-h-0 sm:h-6 sm:px-2 sm:text-[11px] dark:text-rose-300"
               >
                 停止
               </button>
             </div>
-            <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">
+
+            {/* 移动端嵌入式：左 桌宠（thinking 立绘）+ 右 进度文字 */}
+            <div className="flex shrink-0 items-start gap-3 sm:hidden">
+              <div className="shrink-0">
+                <PetCharacter size="compact" />
+              </div>
+              <p className="min-h-[5rem] flex-1 self-stretch text-[14px] font-medium leading-relaxed text-zinc-600 dark:text-zinc-300">
+                {bubble || "脑电波同步中..."}
+              </p>
+            </div>
+
+            {/* 桌面端：进度文字单独行 */}
+            <p className="hidden text-sm font-medium leading-relaxed text-zinc-600 sm:block dark:text-zinc-300">
               {bubble || "脑电波同步中..."}
             </p>
           </div>

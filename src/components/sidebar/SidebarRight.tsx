@@ -91,12 +91,25 @@ export function SidebarRight(): JSX.Element {
       {detailBlock && (
         <motion.aside
           key="sidebar-right"
-          initial={{ width: 0, opacity: 0 }}
-          animate={{ width: RIGHT_WIDTH, opacity: 1 }}
-          exit={{ width: 0, opacity: 0 }}
+          initial={{ opacity: 0, x: 24 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: 24 }}
           transition={{ duration: 0.22, ease: "easeOut" }}
-          style={{ width: RIGHT_WIDTH }}
-          className="flex h-full shrink-0 flex-col overflow-hidden border-l border-black/5 bg-zinc-900/95 text-zinc-100 dark:border-white/5"
+          // 移动端 fixed 全屏覆盖：h-[100dvh] 跟随可视区高度，避开浏览器底栏；
+          // pt 让出 MobileTopBar + safe-top；pb 让出 home indicator。
+          // 桌面端 lg+ relative 内嵌时这些响应式归零。
+          className="flex flex-col overflow-hidden border-l border-black/5 bg-zinc-900/95 text-zinc-100
+                     fixed top-0 left-0 right-0 z-40 h-[100dvh] w-full
+                     pt-[calc(2.75rem_+_env(safe-area-inset-top))]
+                     pb-[env(safe-area-inset-bottom)]
+                     lg:relative lg:inset-auto lg:z-auto lg:h-full lg:shrink-0 lg:pt-0 lg:pb-0
+                     dark:border-white/5"
+          style={{
+            // 桌面端固定 380px 宽；移动端走 fixed 全屏，不需要 width style
+            ...(typeof window !== "undefined" && window.innerWidth >= 1024
+              ? { width: RIGHT_WIDTH }
+              : {}),
+          }}
         >
           <div className="flex items-center justify-between border-b border-zinc-700/40 px-3 py-2 text-[11px] uppercase tracking-[0.12em] text-zinc-400">
             <span>{detailBlock.type} 详情</span>
