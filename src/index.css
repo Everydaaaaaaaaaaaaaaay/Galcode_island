@@ -145,3 +145,51 @@ body {
   width: 100% !important;
   height: 100% !important;
 }
+
+/* ----- 旋转环绕光效 -----
+ * 不旋转 div 本身（旋转会让 mask 出来的边框形状跟着转），改用 @property
+ * 注册一个角度变量动画，让 conic-gradient 的 from 角度走，背景内部转，
+ * div 形状静止，mask 切出的圆角边框稳稳套在外层圆角矩形上。
+ */
+@property --glow-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes glow-spin {
+  to {
+    --glow-angle: 360deg;
+  }
+}
+
+.glow-frame {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  padding: 3px;
+  /* 整圈都保持基线 alpha 0.2 防止"接缝处突然失光"；峰值在 320°-350°，
+   * 旋转时表现为一段亮带在普遍发光的边框上滑动，视觉更自然。
+   * 起点 (0deg) 和终点 (360deg) alpha 一致，无缝循环。 */
+  background: conic-gradient(
+    from var(--glow-angle),
+    rgba(251, 146, 60, 0.2) 0deg,
+    rgba(251, 146, 60, 0.3) 90deg,
+    rgba(251, 146, 60, 0.55) 200deg,
+    rgba(251, 146, 60, 0.85) 290deg,
+    #fb923c 335deg,
+    rgba(251, 146, 60, 0.55) 355deg,
+    rgba(251, 146, 60, 0.2) 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: glow-spin 4s linear infinite;
+  /* 边框外光晕让流光更厚 */
+  filter: drop-shadow(0 0 5px rgba(251, 146, 60, 0.4));
+}

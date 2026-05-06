@@ -112,16 +112,15 @@ export function ResultCard(): JSX.Element {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -10, scale: 0.98 }}
           transition={{ type: "spring", damping: 22, stiffness: 280 }}
-          className="relative w-full overflow-hidden rounded-2xl p-[2px] shadow-lg shadow-amber-500/10 dark:shadow-none"
+          className="relative w-full rounded-2xl shadow-lg shadow-amber-500/10 dark:shadow-none"
         >
-          {/* Faint amber base layer */}
-          <div className="absolute inset-0 bg-amber-100/50 dark:bg-amber-400/10" />
-
-          {/* Spinning conic gradient glow — longer visible arc in light mode */}
-          <div className="absolute top-[-50%] left-[-50%] h-[200%] w-[200%] animate-[spin_4s_linear_infinite] bg-[conic-gradient(from_0deg,transparent_60%,#fb923c_100%)] dark:bg-[conic-gradient(from_0deg,transparent_75%,#fb923c_100%)]" />
+          {/* 真·环绕光效：背景 conic-gradient 的 from 角度做动画（用 @property
+              --glow-angle），div 形状本身不旋转 —— mask 切出的圆角边框稳套外层，
+              光段在边框上平滑滑动一圈。详细 CSS 在 index.css `.glow-frame`。 */}
+          <div aria-hidden="true" className="glow-frame rounded-2xl" />
 
           {/* Inner glass content container */}
-          <div className="relative flex h-full w-full flex-col gap-3 rounded-[14px] border border-white/60 bg-white/70 p-4 backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60">
+          <div className="relative flex h-full w-full flex-col gap-3 rounded-2xl border border-white/60 bg-white/70 p-4 backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60">
             {/* Header */}
             <div className="flex items-center gap-2">
               <div className={`h-2.5 w-2.5 rounded-full ${isError ? "bg-rose-400 shadow-[0_0_6px_rgba(251,113,133,0.5)]" : "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]"} animate-pulse`} />
