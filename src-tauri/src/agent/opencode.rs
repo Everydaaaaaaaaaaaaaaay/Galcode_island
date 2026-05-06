@@ -12,8 +12,9 @@ use crate::agent::runtime::*;
 use crate::agent::sysutils::*;
 use reqwest::Method;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::collections::{BTreeSet, HashMap};
+use std::fs;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -128,6 +129,360 @@ pub fn extract_opencode_error(value: &Value) -> Option<String> {
     read_nested_string(value, &["info", "error", "data", "message"])
         .or_else(|| read_nested_string(value, &["error", "data", "message"]))
         .or_else(|| read_nested_string(value, &["error", "message"]))
+}
+
+// ---------------------------------------------------------------------------
+// auth.json 读写 + provider/model 查询
+// ---------------------------------------------------------------------------
+//
+// OpenCode 的 auth.json 是 `{ "<provider_id>": { "type": "api"/"oauth", "key"?: "...", ... } }`。
+// 我们直接读写文件而不是 spawn `opencode auth set <provider>` —— 那个命令是交互式
+// stdin/stdout，从 GUI 起子进程伪 TTY 太麻烦；JSON 格式稳定且 OpenCode 自己也是
+// 这么读的（@opencode-ai/cli 的 auth.ts）。
+//
+// 写策略：合并而非覆盖。其它服务商的 entry 必须保留（用户可能既登录了 anthropic 又
+// 配了 openrouter 的 key，二者共存）。读策略：缺失视为空 map，不报错。
+
+pub fn read_opencode_auth_file() -> Result<Map<String, Value>, String> {
+    let Some(path) = opencode_auth_file_path() else {
+        return Err("无法定位 OpenCode auth.json 路径（HOME / XDG_DATA_HOME 都解析失败）".into());
+    };
+    if !path.exists() {
+        return Ok(Map::new());
+    }
+    let raw = fs::read_to_string(&path)
+        .map_err(|error| format!("读取 {} 失败: {error}", path.display()))?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Map::new());
+    }
+    let parsed: Value = serde_json::from_str(trimmed)
+        .map_err(|error| format!("解析 {} 失败: {error}", path.display()))?;
+    match parsed {
+        Value::Object(map) => Ok(map),
+        _ => Ok(Map::new()),
+    }
+}
+
+pub fn write_opencode_auth_file(entries: &Map<String, Value>) -> Result<(), String> {
+    let Some(path) = opencode_auth_file_path() else {
+        return Err("无法定位 OpenCode auth.json 路径".into());
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("创建目录 {} 失败: {error}", parent.display()))?;
+    }
+    let serialized = serde_json::to_string_pretty(entries)
+        .map_err(|error| format!("序列化 auth.json 失败: {error}"))?;
+    fs::write(&path, serialized)
+        .map_err(|error| format!("写入 {} 失败: {error}", path.display()))?;
+
+    // Unix 下保护性把权限收紧到 0600 —— auth.json 含明文 key，世界可读会泄密
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(&path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            let _ = fs::set_permissions(&path, perms);
+        }
+    }
+    Ok(())
+}
+
+/// 写 / 改 / 删某个 provider 的认证项。
+/// - mode == "key" 且 key 非空：写 `{type: "api", key: <value>}`
+/// - mode == "oauth"：保留现有 entry（OAuth 凭据由 `opencode auth login` 流程写入），
+///   只确保我们没有错把 api type 留在那。如果不存在则什么都不做（用户还没跑 login）。
+/// - mode == "" / None：删除该 provider 的 entry。
+pub fn upsert_opencode_auth_entry(
+    provider: &str,
+    mode: &str,
+    api_key: Option<&str>,
+) -> Result<(), String> {
+    let provider = provider.trim();
+    if provider.is_empty() {
+        return Err("provider 不能为空".into());
+    }
+    let mut entries = read_opencode_auth_file()?;
+    match mode {
+        "key" => {
+            let key = api_key
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "API Key 不能为空".to_string())?;
+            entries.insert(
+                provider.to_string(),
+                json!({ "type": "api", "key": key }),
+            );
+        }
+        "oauth" => {
+            // 不主动写 oauth entry；如果当前是我们之前写的 api entry 而用户切到 oauth
+            // 模式，就先删掉，留一个干净状态等待 `opencode auth login` 命令写入。
+            if let Some(existing) = entries.get(provider) {
+                let kind = existing
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if kind == "api" {
+                    entries.remove(provider);
+                }
+            }
+        }
+        "" | "none" => {
+            entries.remove(provider);
+        }
+        other => return Err(format!("未知的 authMode: {other}")),
+    }
+    write_opencode_auth_file(&entries)
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OpencodeModelInfo {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OpencodeAuthMethodInfo {
+    /// "oauth" | "api"
+    pub kind: String,
+    /// 给用户看的描述，如 "ChatGPT Pro/Plus (browser)" / "Manually enter API Key"
+    pub label: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OpencodeProviderInfo {
+    pub id: String,
+    pub name: String,
+    /// auth.json 里有这个 provider 的条目 → true
+    pub authenticated: bool,
+    /// auth.json 里这个 provider 的 type（"api"/"oauth"），若已认证才有值
+    pub auth_type: Option<String>,
+    /// 该 provider 在 OpenCode 注册表里声明可用的认证方式
+    /// （来自 GET /provider/auth；如果该 provider 不在 auth catalog 里就为空）
+    pub auth_methods: Vec<OpencodeAuthMethodInfo>,
+    /// 该 provider 的所有模型，键 id + 显示 name
+    pub models: Vec<OpencodeModelInfo>,
+    /// 注册表里该 provider 的默认模型 id（来自 /provider 的 default 字典）
+    pub default_model_id: Option<String>,
+    /// /provider 里 entry.env 字段，列出该家可走的环境变量名（如 ["DEEPSEEK_API_KEY"]）。
+    /// 主要用作 UI placeholder 的提示，让用户知道除了写 auth.json 还可以 export env。
+    pub env_keys: Vec<String>,
+}
+
+/// 拉完整 provider 目录。设计参考 designcode：
+///   - `GET /provider` 返回 `{all: [{id, name, models: {<id>: {name, ...}}, ...}], default: {...}}`
+///     这是 OpenCode 官方目录（来自 models.dev），含 200+ 服务商和它们所有模型，
+///     不依赖用户是否已经配置。等于一份"上货架的全集"。
+///   - `GET /provider/auth` 返回 `{<providerId>: [{label, type}], ...}` —— 每家
+///     声明可走的登录路径（OAuth 还是 API Key），UI 拿这个画"登录"或"填 key"按钮。
+///   - 跟本地 auth.json 合并：填上 `authenticated/auth_type`，让用户看到哪些已配过。
+///
+/// 没启动 serve 时返回错误（仅 auth.json 兜底太弱了，没模型清单），让 UI 提示先启动。
+pub async fn list_opencode_providers(port: u16) -> Result<Vec<OpencodeProviderInfo>, String> {
+    // 并发拉两个端点；任一失败都直接返回错误，让前端显示原始报错（比静默 fallback 好排查）
+    let (catalog, auth_catalog) = tokio::try_join!(
+        opencode_request_with_timeout(
+            port,
+            Method::GET,
+            "/provider",
+            None,
+            None,
+            Duration::from_secs(15),
+        ),
+        opencode_request_with_timeout(
+            port,
+            Method::GET,
+            "/provider/auth",
+            None,
+            None,
+            Duration::from_secs(8),
+        ),
+    )?;
+
+    let auth_entries = read_opencode_auth_file().unwrap_or_default();
+    let auth_methods_map = parse_provider_auth_methods(&auth_catalog);
+    let default_models = catalog
+        .get("default")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    // OpenCode 自己也维护一份"已连接"的 provider id 列表（来自 /provider 的 connected 字段）。
+    // 这是权威源，比 auth.json 更新及时（用户跑过 `opencode auth login` 后立即更新）。
+    // 我们把 auth.json 和 connected 取并集来判断 authenticated。
+    let connected: BTreeSet<String> = catalog
+        .get("connected")
+        .and_then(Value::as_array)
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(|v| v.as_str().map(ToString::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let providers_array = catalog
+        .get("all")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "GET /provider 响应缺少 all 字段".to_string())?;
+
+    let mut out: Vec<OpencodeProviderInfo> = providers_array
+        .iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(Value::as_str)?.to_string();
+            let name = entry
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(id.as_str())
+                .to_string();
+            let models = extract_provider_models(entry);
+            let auth_methods = auth_methods_map.get(&id).cloned().unwrap_or_default();
+            let local = auth_entries.get(&id);
+            let in_connected = connected.contains(&id);
+            let auth_type = local
+                .and_then(|entry| entry.get("type").and_then(Value::as_str))
+                .map(ToString::to_string);
+            let env_keys: Vec<String> = entry
+                .get("env")
+                .and_then(Value::as_array)
+                .map(|array| {
+                    array
+                        .iter()
+                        .filter_map(|v| v.as_str().map(ToString::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(OpencodeProviderInfo {
+                id: id.clone(),
+                name,
+                authenticated: in_connected || local.is_some(),
+                auth_type,
+                auth_methods,
+                models,
+                default_model_id: default_models
+                    .get(&id)
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                env_keys,
+            })
+        })
+        .collect();
+
+    out.sort_by(|a, b| {
+        // 已认证的排前；之后按是否有模型；最后按名字
+        let a_rank = (!a.authenticated, a.models.is_empty());
+        let b_rank = (!b.authenticated, b.models.is_empty());
+        a_rank
+            .cmp(&b_rank)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    Ok(out)
+}
+
+fn parse_provider_auth_methods(value: &Value) -> HashMap<String, Vec<OpencodeAuthMethodInfo>> {
+    let mut out = HashMap::new();
+    let Some(map) = value.as_object() else {
+        return out;
+    };
+    for (provider_id, entries) in map {
+        let Some(array) = entries.as_array() else {
+            continue;
+        };
+        let methods: Vec<OpencodeAuthMethodInfo> = array
+            .iter()
+            .filter_map(|entry| {
+                let kind = entry.get("type").and_then(Value::as_str)?.to_string();
+                let label = entry
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                Some(OpencodeAuthMethodInfo { kind, label })
+            })
+            .collect();
+        if !methods.is_empty() {
+            out.insert(provider_id.clone(), methods);
+        }
+    }
+    out
+}
+
+fn extract_provider_models(entry: &Value) -> Vec<OpencodeModelInfo> {
+    // /provider 的 models 是 `{<id>: {id, name, ...}}` object 形态
+    if let Some(map) = entry.get("models").and_then(Value::as_object) {
+        let mut models: Vec<OpencodeModelInfo> = map
+            .iter()
+            .map(|(id, value)| OpencodeModelInfo {
+                id: value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(id.as_str())
+                    .to_string(),
+                name: value
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(id.as_str())
+                    .to_string(),
+            })
+            .collect();
+        // 名字字典序，让 UI 列表稳定
+        models.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        return models;
+    }
+    // 兜底：array 形态（OpenCode 老版本可能有）
+    if let Some(array) = entry.get("models").and_then(Value::as_array) {
+        return array
+            .iter()
+            .filter_map(|model| {
+                let id = model
+                    .get("id")
+                    .or_else(|| model.get("name"))
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+                    .or_else(|| model.as_str().map(ToString::to_string))?;
+                let name = model
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(id.as_str())
+                    .to_string();
+                Some(OpencodeModelInfo { id, name })
+            })
+            .collect();
+    }
+    Vec::new()
+}
+
+/// 在系统终端打开 `opencode auth login <provider>`，让用户在终端里完成 OAuth/key 输入。
+/// 完成后 ~/.local/share/opencode/auth.json 会被 opencode CLI 自己写好。
+pub fn open_opencode_login_terminal(
+    app: &AppHandle,
+    requested_binary: Option<&str>,
+    provider: Option<&str>,
+    proxy: Option<&str>,
+) -> Result<String, String> {
+    let binary = resolve_opencode_binary(app, requested_binary);
+    let proxy_prefix = proxy_env_prefix(proxy);
+    let mut trailing_args = vec!["auth".to_string(), "login".to_string()];
+    if let Some(value) = provider.map(str::trim).filter(|s| !s.is_empty()) {
+        trailing_args.push(value.to_string());
+    }
+    let command_text = format!(
+        "{proxy_prefix}{}",
+        shell_command_text(&binary, &[], &trailing_args)
+    );
+    let hint = if let Some(value) = provider.map(str::trim).filter(|s| !s.is_empty()) {
+        format!(
+            "已在系统终端中打开 `opencode auth login {value}`。完成登录后回到软件点\u{201c}刷新状态\u{201d}。"
+        )
+    } else {
+        "已在系统终端中打开 `opencode auth login`。完成登录后回到软件点\u{201c}刷新状态\u{201d}。".to_string()
+    };
+    open_terminal_command(&command_text, &hint)
 }
 
 // ---------------------------------------------------------------------------
@@ -1398,6 +1753,10 @@ pub fn spawn_opencode_event_stream(
 
 /// 阻塞式 turn：在 OpenCode session 上发一个 prompt，并等到 HTTP 响应回来。
 /// 期间自动启动 SSE event stream 和 auto-approve permission poller，结束时清理。
+///
+/// `provider_id` / `model_id` 非空时会注入到 POST /session/{id}/message 请求体的
+/// providerID/modelID 字段——OpenCode 用这两个组合决定走哪个服务商哪个模型，
+/// 用户不指定时让 OpenCode 用其内置默认（小模型 OAuth 套餐里的 default）。
 pub async fn run_opencode_turn(
     app: &AppHandle,
     state: &RuntimeState,
@@ -1407,6 +1766,8 @@ pub async fn run_opencode_turn(
     system: Option<&str>,
     directory: Option<&str>,
     stream_id: Option<&str>,
+    provider_id: Option<&str>,
+    model_id: Option<&str>,
 ) -> Result<(String, Value), String> {
     let status = snapshot_opencode(app, state, run_id).await?;
     if !status.running {
@@ -1425,6 +1786,12 @@ pub async fn run_opencode_turn(
 
     if let Some(system) = system.filter(|value| !value.trim().is_empty()) {
         payload["system"] = Value::String(system.to_string());
+    }
+    if let Some(provider) = provider_id.map(str::trim).filter(|value| !value.is_empty()) {
+        payload["providerID"] = Value::String(provider.to_string());
+    }
+    if let Some(model) = model_id.map(str::trim).filter(|value| !value.is_empty()) {
+        payload["modelID"] = Value::String(model.to_string());
     }
 
     let poller =

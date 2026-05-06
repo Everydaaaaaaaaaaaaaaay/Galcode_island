@@ -13,6 +13,14 @@ pub struct BackendSettings {
     pub effort: Option<String>,
     pub proxy: Option<String>,
     pub binary: Option<String>,
+    /// 仅 OpenCode 用：服务商 id（"anthropic"/"openai"/...）。其它 backend 全为 None。
+    pub provider: Option<String>,
+    /// 仅 OpenCode 用：API Key（authMode == "key" 时生效）。Rust 端不主动用，
+    /// 但 launch_opencode_agent 在启动 serve 之前会拿它去调 opencode_set_auth 写
+    /// auth.json，用完丢；持久化以前端 zustand 为准。
+    pub api_key: Option<String>,
+    /// 仅 OpenCode 用："oauth" / "key" / None。决定启动前是否要 set_auth。
+    pub auth_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -41,12 +49,20 @@ pub fn update_backend_preferences(
     effort: Option<String>,
     proxy: Option<String>,
     binary: Option<String>,
+    provider: Option<String>,
+    api_key: Option<String>,
+    auth_mode: Option<String>,
 ) -> Result<(), String> {
     let settings = BackendSettings {
         model: normalize(model),
         effort: normalize(effort),
         proxy: normalize(proxy),
         binary: normalize(binary),
+        provider: normalize(provider),
+        // api_key 不 trim：用户密钥可能包含前后无意义空白被误删的风险，但通常不会有；
+        // 走 normalize 保持空串归 None 行为一致。
+        api_key: normalize(api_key),
+        auth_mode: normalize(auth_mode),
     };
 
     let mut prefs = get_global_prefs()

@@ -557,6 +557,24 @@ pub fn launch_opencode_agent(
 
         emit_progress(&app_handle, Some(&run_id), &sid, AgentStatus::Starting, "启动 OpenCode serve…", 25.0);
         let prefs = crate::agent::preferences::load_backend_preferences("opencode");
+
+        // 用户在设置里把 authMode 选成 "key" 并填了 API Key 时，启动 serve 之前先把
+        // 凭据写到 auth.json。OpenCode serve 启动后会从那里读认证，没有这步即便填
+        // 了 key 也走不通；oauth 模式则依赖用户已经跑过 `opencode auth login`。
+        if let (Some(mode), Some(provider)) = (prefs.auth_mode.as_deref(), prefs.provider.as_deref())
+        {
+            if mode == "key" {
+                if let Err(error) = crate::agent::opencode::upsert_opencode_auth_entry(
+                    provider,
+                    "key",
+                    prefs.api_key.as_deref(),
+                ) {
+                    eprintln!("[opencode] auth.json write failed: {}", error);
+                    // 不直接 fail：让 serve 启起来后用户能看到清晰报错（可能只是 key 字段空）
+                }
+            }
+        }
+
         let t_serve_start = std::time::Instant::now();
 
         if let Err(error) = opencode_agent::opencode_start(
@@ -625,6 +643,8 @@ pub fn launch_opencode_agent(
             None,
             Some(&cwd_owned),
             Some(&stream_id),
+            prefs.provider.as_deref(),
+            prefs.model.as_deref(),
         )
         .await;
 

@@ -8,6 +8,16 @@ export interface BackendPrefs {
   effort: string;
   proxy: string;
   binary: string;
+  /// 仅 OpenCode 使用：服务商 id（如 "anthropic"/"openai"/"deepseek"/"openrouter"…）
+  /// 其它 backend 写空。launch_opencode_agent 读到非空就把 providerID/modelID
+  /// 注入到 POST /session/{id}/message 请求体里，让 OpenCode 用这个组合发请求。
+  provider: string;
+  /// 仅 OpenCode 使用：用户自填的 API Key（authMode === "key" 时生效）。
+  /// 不持久化到 Rust 内存——通过 opencode_set_auth 命令直接写到 ~/.config/opencode/auth.json，
+  /// 后续 OpenCode 服务自己读那个文件做认证。前端 zustand persist 保留方便回填表单。
+  apiKey: string;
+  /// "" = 未选 / "oauth" = 走 `opencode auth login` / "key" = 自填 API Key。
+  authMode: "" | "oauth" | "key";
 }
 
 const emptyBackendPrefs = (): BackendPrefs => ({
@@ -15,6 +25,9 @@ const emptyBackendPrefs = (): BackendPrefs => ({
   effort: "",
   proxy: "",
   binary: "",
+  provider: "",
+  apiKey: "",
+  authMode: "",
 });
 
 /// 服务商预设 —— 选定后自动填 base_url 和默认 model id。
@@ -178,6 +191,19 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: "agent-settings-storage",
+      // 兼容老版本 persist：之前的 BackendPrefs 只有 model/effort/proxy/binary 四个字段，
+      // 现在加了 provider/apiKey/authMode 后，旧的 localStorage 数据还原回来时会缺这三个，
+      // 后续访问 prefs.X 时是 undefined，碰到 .trim() / `<select value={undefined}>` 会让
+      // React 报错甚至白屏。merge 时用 emptyBackendPrefs() 兜底所有缺失字段。
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<SettingsState>;
+        const mergedBackends: Record<BackendKey, BackendPrefs> = {
+          "claude-code": { ...emptyBackendPrefs(), ...(persisted.backends?.["claude-code"] ?? {}) },
+          codex: { ...emptyBackendPrefs(), ...(persisted.backends?.codex ?? {}) },
+          opencode: { ...emptyBackendPrefs(), ...(persisted.backends?.opencode ?? {}) },
+        };
+        return { ...currentState, ...persisted, backends: mergedBackends };
+      },
       partialize: (state) => ({
         systemPrompt: state.systemPrompt,
         apiKey: state.apiKey,

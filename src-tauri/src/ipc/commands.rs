@@ -311,7 +311,8 @@ pub async fn list_llm_models(
         .map_err(|error| format!("list_llm_models task failed: {error}"))?
 }
 
-/// 写入某个 backend 的运行时偏好（model / effort / proxy / binary，全部 Option）。
+/// 写入某个 backend 的运行时偏好。
+/// 通用字段 model/effort/proxy/binary，加 OpenCode 专属的 provider/apiKey/authMode。
 /// 后端的 launch_*_agent 在每次 turn 启动时都会读这份偏好。
 /// `backend` 取值：`"claude-code" | "codex" | "opencode"`。
 #[tauri::command]
@@ -321,8 +322,13 @@ pub fn update_backend_preferences(
     effort: Option<String>,
     proxy: Option<String>,
     binary: Option<String>,
+    provider: Option<String>,
+    api_key: Option<String>,
+    auth_mode: Option<String>,
 ) -> Result<(), String> {
-    crate::agent::preferences::update_backend_preferences(&backend, model, effort, proxy, binary)
+    crate::agent::preferences::update_backend_preferences(
+        &backend, model, effort, proxy, binary, provider, api_key, auth_mode,
+    )
 }
 
 #[tauri::command]
@@ -619,6 +625,56 @@ pub async fn opencode_create_session(
     .await
 }
 
+/// 把用户填的 API Key 写到 OpenCode 的 auth.json（合并写入，不覆盖其它 provider）。
+/// `mode == "key"` 写 `{type:"api", key}`；`mode == "oauth"` 把已有的 api 类型条目清掉
+/// （让用户随后跑 opencode_login_open 走 OAuth 流程重新写入）；空串删除条目。
+#[tauri::command]
+pub async fn opencode_set_auth(
+    provider: String,
+    mode: String,
+    api_key: Option<String>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        opencode_agent::upsert_opencode_auth_entry(&provider, &mode, api_key.as_deref())
+    })
+    .await
+    .map_err(|error| format!("opencode_set_auth task failed: {error}"))?
+}
+
+/// 在系统终端打开 `opencode auth login [provider]` 让用户走 OAuth/CLI 交互式登录。
+#[tauri::command]
+pub async fn opencode_login_open(
+    app: AppHandle,
+    binary: Option<String>,
+    provider: Option<String>,
+    proxy: Option<String>,
+) -> Result<String, String> {
+    let handle = app.clone();
+    tokio::task::spawn_blocking(move || {
+        opencode_agent::open_opencode_login_terminal(
+            &handle,
+            binary.as_deref(),
+            provider.as_deref(),
+            proxy.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| format!("opencode_login_open task failed: {error}"))?
+}
+
+/// 拉服务商 + 模型清单。需要 OpenCode serve 已经启动，没启动时回落到 auth.json 里
+/// 已有 provider 的最小集合（model 列表为空）。前端可通过 `cwd` 让 serve 用对应工程目录。
+#[tauri::command]
+pub async fn opencode_list_providers(
+    app: AppHandle,
+    runtime_state: State<'_, Arc<RuntimeState>>,
+    run_id: Option<String>,
+) -> Result<Vec<opencode_agent::OpencodeProviderInfo>, String> {
+    let run = run_id.unwrap_or_else(|| DEFAULT_RUN_ID.to_string());
+    let status = opencode_agent::snapshot_opencode(&app, runtime_state.inner().as_ref(), &run).await?;
+    opencode_agent::list_opencode_providers(status.port).await
+}
+
 /// OpenCode 原始 turn —— HTTP POST + SSE，session_id 必须先 create。
 /// 返回 { text, raw }（text 是从 message list 提取的纯文本）。
 #[tauri::command]
@@ -631,6 +687,8 @@ pub async fn opencode_send_prompt(
     system: Option<String>,
     directory: Option<String>,
     stream_id: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
 ) -> Result<Value, String> {
     let run = run_id.unwrap_or_else(|| DEFAULT_RUN_ID.to_string());
     let (final_text, raw) = opencode_agent::run_opencode_turn(
@@ -642,6 +700,8 @@ pub async fn opencode_send_prompt(
         system.as_deref(),
         directory.as_deref(),
         stream_id.as_deref(),
+        provider.as_deref(),
+        model.as_deref(),
     )
     .await?;
     Ok(json!({ "text": final_text, "raw": raw }))

@@ -52,6 +52,10 @@ function App(): JSX.Element {
         effort: prefs.effort || null,
         proxy: prefs.proxy || null,
         binary: prefs.binary || null,
+        // 仅 OpenCode 使用，其它 backend 永远是空字符串 → null
+        provider: prefs.provider || null,
+        apiKey: prefs.apiKey || null,
+        authMode: prefs.authMode || null,
       }).catch(console.error);
     }
   }, []);

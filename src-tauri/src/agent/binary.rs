@@ -185,6 +185,31 @@ pub fn codex_models_cache_file() -> Option<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
+// OpenCode auth.json 路径
+// ---------------------------------------------------------------------------
+//
+// OpenCode 把凭据写到 `$XDG_DATA_HOME/opencode/auth.json`（Unix 默认 ~/.local/share/opencode；
+// Windows 上 Galcode 把 XDG_DATA_HOME 改写为 LocalAppData 子目录，见 opencode_windows_xdg_home）。
+// 我们直接写文件而不是 spawn `opencode auth set`：CLI 走的是交互式 stdin/stdout 流，
+// 在 GUI app 里要伪 TTY 太麻烦，文件格式又简单稳定（{"provider": {"type":"api","key":"..."}}）。
+
+pub fn opencode_auth_file_path() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        return opencode_windows_xdg_home("data").map(|home| home.join("opencode").join("auth.json"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Unix: 优先尊重用户已经设的 XDG_DATA_HOME，否则走 spec 默认 ~/.local/share
+        let data_home = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| user_home_dir().map(|home| home.join(".local").join("share")))?;
+        Some(data_home.join("opencode").join("auth.json"))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // OpenCode XDG 运行时环境 (Windows)
 // ---------------------------------------------------------------------------
 
