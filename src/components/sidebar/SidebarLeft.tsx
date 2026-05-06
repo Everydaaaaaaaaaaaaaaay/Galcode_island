@@ -117,8 +117,9 @@ export function SidebarLeft(): JSX.Element {
         )}
       </div>
 
-      {/* 顶部菜单 */}
-      <div className="flex flex-col gap-0.5 border-b border-black/5 px-2 py-2 dark:border-white/5">
+      {/* 顶部菜单：紧贴 drag bar 下方（pt-0），让第一个按钮顶部 y === drag bar
+          底边（28px），跟中栏 pt-7 起点对齐，避免左侧出现一段空白 */}
+      <div className="flex flex-col gap-0.5 border-b border-black/5 px-2 pb-2 dark:border-white/5">
         <MenuButton
           label="所有项目"
           active={leftSidebarView === "projects"}
