@@ -33,11 +33,11 @@ pub const FORWARDED_EVENTS: &[&str] = &[
     "agent://cleanup",
     "galcode://cli-output",
     "lan://project-launched",
-    // zustand 持久化 store 的跨设备同步：任一客户端调 lan_set_storage 后，
-    // 后端把 { key, value, source } 广播给所有连着的客户端，让它们对自己的
-    // 持久化 store 触发 rehydrate（source === 自身 clientId 时跳过）。
-    "storage://changed",
-    "storage://removed",
+    // 注意：storage://changed / removed 不再走 forwarder 转发。
+    // 它们由 commands::lan_set_storage / lan_remove_storage 直接 append 到
+    // EventBus（移动端长轮询拉到），并按 notify_webview 决定是否再 app.emit
+    // 给 Tauri webview。桌面 webview 自己发起 setItem 时设 notify_webview=false，
+    // 避免"自己 emit 自己又收到"的无意义 IPC 回程。
 ];
 
 #[derive(Clone, Debug)]

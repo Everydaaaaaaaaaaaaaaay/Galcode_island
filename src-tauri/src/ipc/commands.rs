@@ -957,8 +957,14 @@ pub fn lan_get_storage(
 /// 写入并广播。`source` 是写入方的 clientId（前端 sharedStorage.ts 生成的随机值），
 /// 其它客户端收到广播时会比对 source 跳过自己的回声。
 ///
-/// 性能：高频 set（agent 流式时 ~10Hz）只更新内存 HashMap + emit 实时事件，
-/// 写盘走 800ms debounce —— 同 key/不同 key 多次 set 在窗口内合并为一次 IO。
+/// `notify_webview` 控制是否再用 `app.emit` 通知 Tauri webview：
+///   - 桌面 webview 自己发起的 setItem（已经在自己端设过 state）→ 设 false，
+///     避免"自己 emit 自己又收到"一次无意义 IPC 来回
+///   - 移动端通过 HTTP 发起的 setItem → 设 true（默认），让桌面 webview 也能 rehydrate
+///   - 不论哪种情况都直接 push 到 EventBus，移动端长轮询路径不依赖 app.emit
+///
+/// 性能：高频 set（agent 流式 ~10Hz）只更新内存 HashMap + 入 EventBus + 必要时 emit，
+/// 写盘走 800ms debounce —— 多次 set 在窗口内合并为一次 IO。
 #[tauri::command]
 pub fn lan_set_storage(
     app: AppHandle,
@@ -966,6 +972,7 @@ pub fn lan_set_storage(
     key: String,
     value: String,
     source: Option<String>,
+    notify_webview: Option<bool>,
 ) -> Result<(), String> {
     use tauri::Emitter;
     {
@@ -977,14 +984,18 @@ pub fn lan_set_storage(
         }
         map.insert(key.clone(), value.clone());
     }
-    let _ = app.emit(
-        "storage://changed",
-        json!({
-            "key": key,
-            "value": value,
-            "source": source.unwrap_or_default(),
-        }),
-    );
+    let payload = json!({
+        "key": key,
+        "value": value,
+        "source": source.unwrap_or_default(),
+    });
+    // 移动端 / 其它 LAN 客户端走长轮询拿事件 —— 直接 append（不经过 Tauri 事件总线）
+    lan.event_bus
+        .append("storage://changed".to_string(), payload.clone());
+    // 仅当调用方不是桌面 webview 自己时才 emit 给 webview（避免回声）
+    if notify_webview.unwrap_or(true) {
+        let _ = app.emit("storage://changed", payload);
+    }
     crate::lan::shared_storage::schedule_save(&app, lan.inner());
     Ok(())
 }
@@ -995,6 +1006,7 @@ pub fn lan_remove_storage(
     lan: State<Arc<LanRuntimeState>>,
     key: String,
     source: Option<String>,
+    notify_webview: Option<bool>,
 ) -> Result<(), String> {
     use tauri::Emitter;
     {
@@ -1004,13 +1016,15 @@ pub fn lan_remove_storage(
         }
         map.remove(&key);
     }
-    let _ = app.emit(
-        "storage://removed",
-        json!({
-            "key": key,
-            "source": source.unwrap_or_default(),
-        }),
-    );
+    let payload = json!({
+        "key": key,
+        "source": source.unwrap_or_default(),
+    });
+    lan.event_bus
+        .append("storage://removed".to_string(), payload.clone());
+    if notify_webview.unwrap_or(true) {
+        let _ = app.emit("storage://removed", payload);
+    }
     crate::lan::shared_storage::schedule_save(&app, lan.inner());
     Ok(())
 }

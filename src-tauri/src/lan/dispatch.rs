@@ -277,6 +277,7 @@ struct StorageSetArgs {
     key: String,
     value: String,
     source: Option<String>,
+    notify_webview: Option<bool>,
 }
 
 #[derive(Default, Deserialize)]
@@ -284,6 +285,7 @@ struct StorageSetArgs {
 struct StorageRemoveArgs {
     key: String,
     source: Option<String>,
+    notify_webview: Option<bool>,
 }
 
 /// 主分发函数。HTTP server 的 /api/cmd/<cmd> handler 调它。
@@ -569,12 +571,25 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
         }
         "lan_set_storage" => {
             let p: StorageSetArgs = parse(args)?;
-            commands::lan_set_storage(app.clone(), lan_state, p.key, p.value, p.source)?;
+            commands::lan_set_storage(
+                app.clone(),
+                lan_state,
+                p.key,
+                p.value,
+                p.source,
+                p.notify_webview,
+            )?;
             Ok(Value::Null)
         }
         "lan_remove_storage" => {
             let p: StorageRemoveArgs = parse(args)?;
-            commands::lan_remove_storage(app.clone(), lan_state, p.key, p.source)?;
+            commands::lan_remove_storage(
+                app.clone(),
+                lan_state,
+                p.key,
+                p.source,
+                p.notify_webview,
+            )?;
             Ok(Value::Null)
         }
 

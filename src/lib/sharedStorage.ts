@@ -163,10 +163,15 @@ export function createSharedStorage(
       // zustand persist 在 setItem 同步完成时也走同步路径，避免"setState 触发的
       // setItem 还没完成时 hydrate 又过来 setState"的竞态。后端写入失败也无所谓:
       // localStorage 是真相，下次 setItem 会再推一次。
+      //
+      // notifyWebview: !isTauri —— 桌面 webview 自己发的事件不需要 app.emit 回到
+      // 自己（已经在自己端写过 state，回声只能被 source 比对跳过）；浏览器（移动端）
+      // 发的需要让桌面 webview 收到 → 用默认 true 触发 app.emit。
       void invoke("lan_set_storage", {
         key: name,
         value: raw,
         source: CLIENT_ID,
+        notifyWebview: !isTauri,
       }).catch((err) => {
         console.warn("[shared-storage] push to backend failed", err);
       });
@@ -176,9 +181,11 @@ export function createSharedStorage(
       if (typeof localStorage !== "undefined") {
         try { localStorage.removeItem(name); } catch { /* ignore */ }
       }
-      void invoke("lan_remove_storage", { key: name, source: CLIENT_ID }).catch(
-        (err) => console.warn("[shared-storage] remove on backend failed", err),
-      );
+      void invoke("lan_remove_storage", {
+        key: name,
+        source: CLIENT_ID,
+        notifyWebview: !isTauri,
+      }).catch((err) => console.warn("[shared-storage] remove on backend failed", err));
     },
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
