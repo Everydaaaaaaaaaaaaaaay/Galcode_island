@@ -54,11 +54,12 @@ async function ensureDir(dir) {
 function npmInstall(tmpDir, packageName) {
   // --no-save / --no-package-lock：不污染 lockfile
   // --prefix tmpDir：装到 tmp 目录里
+  // shell: true 在 Windows 必须开 —— spawnSync 不带 shell 时找不到 npm.cmd / npx.cmd
   console.log(`  → npm install ${packageName}`);
   const result = spawnSync(
     "npm",
     ["install", "--no-save", "--no-package-lock", "--no-fund", "--no-audit", "--prefix", tmpDir, packageName],
-    { stdio: "inherit", encoding: "utf8" }
+    { stdio: "inherit", encoding: "utf8", shell: process.platform === "win32" },
   );
   if (result.status !== 0) {
     throw new Error(`npm install ${packageName} failed (exit ${result.status})`);

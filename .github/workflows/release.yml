@@ -104,13 +104,17 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: node scripts/prepare-runtime.mjs --sign
 
-      - name: Build Tauri bundle (.app only — 后续手动签名 + DMG + tar.gz)
+      - name: Build Tauri bundle (.app only — 后续手动 DMG + tar.gz)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # **故意**不传 APPLE_SIGNING_IDENTITY 给 tauri build：让它跳过 deep
-          # codesign（那会用 --deep --force 把我们已经给 bundled CLI 加好的 JIT
-          # entitlements 覆盖掉）。后续 fix-bundle-signatures.mjs 从最深层逐层补签。
+          # 传 APPLE_SIGNING_IDENTITY：让 tauri 自己跑一遍 codesign --deep --force
+          # 把整个 .app 内部都签一遍，建立完整签名链。这一步会把我们给 bundled CLI
+          # 加的 JIT entitlements 覆盖掉，但**这是预期** —— 后续 fix-bundle-signatures
+          # 用 --force 重新签给 JIT binary 加回 entitlements。
+          # 不传的话 tauri 会跳过签名，DMG 创建 / 公证 / fix-bundle 都会因为内部
+          # binary 未签报"resource not signed"。
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: npx tauri build --target aarch64-apple-darwin --bundles app
 
       - name: Fix bundle signatures (manual codesign with JIT entitlements)

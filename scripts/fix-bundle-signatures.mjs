@@ -1,17 +1,18 @@
-// 在 tauri build（无 APPLE_SIGNING_IDENTITY 模式）之后运行：手动签名 bundle 内
-// 所有原生二进制 + 主可执行文件 + 整个 .app。
+// 在 tauri build（已带 APPLE_SIGNING_IDENTITY 完成内置 codesign --deep --force）
+// 之后运行：用 --force 覆盖 tauri 已经签好的内部 binary，给 JIT binary 重新加
+// entitlements。
 //
-// 为什么不用 tauri build 自带的签名？
-//   tauri 内部走 `codesign --deep --force`，会把我们已经为 bundled CLI（claude /
-//   codex / opencode）单独附加好的 JIT entitlements 一并覆盖掉 —— 公证仍能通过，
-//   但用户启动后 .NET / Node V8 在 hardened runtime 下因为没有 allow-jit 会
-//   crash。所以：
-//     1. tauri build 时屏蔽 APPLE_SIGNING_IDENTITY 让它跳过 deep codesign
-//     2. 这里从最深层 binary 开始逐层签：JIT binary 加 entitlements，其它正常签
-//     3. 最后签整个 .app
+// 为什么需要这一步？
+//   tauri 自带的 `codesign --deep --force` 会把所有内部 binary 重签一遍，但
+//   **不会**给单个 binary 加 entitlements（tauri 的 deep 签是统一签名，无法对
+//   bundled CLI 单独传 --entitlements）。结果就是公证仍能通过，但用户启动后
+//   Node V8 / .NET / 其它 JIT 引擎在 hardened runtime 下因为缺 allow-jit 而 crash。
+//   所以这里再走一次：从最深层 binary 开始逐层签，JIT binary 加 entitlements,
+//   其它正常签，最后再签整个 .app。
 //
 // 这个脚本踩过两个坑（参考项目教训）：
-//   - 必须**先签内部二进制再签主二进制再签 .app**，反过来 codesign 会重新覆盖
+//   - 必须**先签内部二进制再签主二进制再签 .app**，反过来 codesign --deep 会
+//     重新覆盖掉刚加的 entitlements
 //   - 只对 Mach-O 文件做 codesign（用 magic number 探测），跳过普通文件 / JS / 文本
 
 import { execFileSync, spawnSync } from "node:child_process";
