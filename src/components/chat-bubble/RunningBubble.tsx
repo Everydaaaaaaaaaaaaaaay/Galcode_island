@@ -35,16 +35,14 @@ export function RunningBubble(): JSX.Element {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -10, scale: 0.95 }}
           transition={{ type: "spring", damping: 22, stiffness: 280 }}
-          className="relative w-full overflow-hidden rounded-2xl rounded-bl-sm p-[2px] shadow-lg shadow-amber-500/10 dark:shadow-none"
+          className="relative w-full rounded-2xl rounded-bl-sm shadow-lg shadow-amber-500/10 dark:shadow-none"
         >
-          {/* Faint amber base layer */}
-          <div className="absolute inset-0 bg-amber-100/50 dark:bg-amber-400/10" />
-
-          {/* Spinning conic gradient glow — longer visible arc in light mode */}
-          <div className="absolute top-[-50%] left-[-50%] h-[200%] w-[200%] animate-[spin_4s_linear_infinite] bg-[conic-gradient(from_0deg,transparent_60%,#fb923c_100%)] dark:bg-[conic-gradient(from_0deg,transparent_75%,#fb923c_100%)]" />
+          {/* 真·环绕光效：跟 ResultCard / InputBubble 同款 .glow-frame —— 静止 div
+              + 动画 conic-gradient from 角度，详见 index.css */}
+          <div aria-hidden="true" className="glow-frame rounded-2xl rounded-bl-sm" />
 
           {/* Inner glass content container —— 自然高度三段式 */}
-          <div className="relative flex w-full flex-col gap-3 rounded-[14px] border border-white/60 bg-white/70 p-3 backdrop-blur-2xl sm:p-4 dark:border-white/10 dark:bg-slate-800/60">
+          <div className="relative flex w-full flex-col gap-3 rounded-2xl rounded-bl-sm border border-white/60 bg-white/70 p-3 backdrop-blur-2xl sm:p-4 dark:border-white/10 dark:bg-slate-800/60">
             {/* 顶部：状态徽章 + 停止 */}
             <div className="flex shrink-0 items-center gap-2">
               <div className="h-2 w-2 rounded-full bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.5)] animate-pulse" />

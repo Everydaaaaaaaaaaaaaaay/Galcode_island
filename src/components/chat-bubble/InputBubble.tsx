@@ -120,17 +120,16 @@ export function InputBubble(): JSX.Element {
           exit={{ opacity: 0, y: -10, scale: 0.95 }}
           transition={{ type: "spring", damping: 22, stiffness: 280 }}
           // 自然高度，textarea 自身有 min-h 提供输入区
-          className="relative w-full overflow-hidden rounded-[22px] rounded-bl-[6px] p-[2px] shadow-lg shadow-amber-500/10 dark:shadow-none"
+          className="relative w-full rounded-[22px] rounded-bl-[6px] shadow-lg shadow-amber-500/10 dark:shadow-none"
         >
-          {/* Faint amber base layer */}
-          <div className="absolute inset-0 bg-amber-100/50 dark:bg-amber-400/10" />
-
-          {/* Spinning conic gradient glow — longer visible arc in light mode */}
-          <div className="absolute top-[-50%] left-[-50%] h-[200%] w-[200%] animate-[spin_4s_linear_infinite] bg-[conic-gradient(from_0deg,transparent_60%,#fb923c_100%)] dark:bg-[conic-gradient(from_0deg,transparent_75%,#fb923c_100%)]" />
+          {/* 真·环绕光效：背景 conic-gradient 的 from 角度做动画（用 @property
+              --glow-angle），div 形状本身不旋转 —— mask 切出的圆角边框稳套外层，
+              光段在边框上平滑滑动一圈。详细 CSS 在 index.css `.glow-frame`。 */}
+          <div aria-hidden="true" className="glow-frame rounded-[22px] rounded-bl-[6px]" />
 
           {/* Inner glass content container —— 自然高度，三段式（嵌入桌宠头部 /
               textarea / 启动按钮）；textarea 自身 min-h 提供编辑区高度 */}
-          <div className="relative flex w-full flex-col gap-3 rounded-[20px] rounded-bl-[4px] border border-white/60 bg-white/70 p-3.5 backdrop-blur-2xl sm:p-5 dark:border-white/10 dark:bg-slate-800/60">
+          <div className="relative flex w-full flex-col gap-3 rounded-[22px] rounded-bl-[6px] border border-white/60 bg-white/70 p-3.5 backdrop-blur-2xl sm:p-5 dark:border-white/10 dark:bg-slate-800/60">
             {/* 移动端嵌入式头部：左 桌宠 compact + 右 greeting 文字 */}
             <div className="flex shrink-0 items-start gap-3 sm:hidden">
               <div className="shrink-0">
