@@ -9,6 +9,8 @@ import {
 import { useProfileStore } from "../../stores/useProfileStore";
 import { AgentBackendsSection } from "./AgentBackendsSection";
 import { LanAccessPanel } from "./LanAccessPanel";
+// 应用更新已经移到「关于」弹窗（左栏底部入口），SettingsModal 只保留 LLM /
+// backend / 局域网这些"配置"类的项
 
 import { invoke } from "../../lib/bridge";
 

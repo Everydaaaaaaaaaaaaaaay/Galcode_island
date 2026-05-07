@@ -16,6 +16,7 @@ import { useInPageSearchHotkey } from "./hooks/useInPageSearchHotkey";
 import { useLanProjectsSync } from "./hooks/useLanProjectsSync";
 import { useTabsReattach } from "./hooks/useTabsReattach";
 import { useThemeHotkey } from "./hooks/useThemeHotkey";
+import { useUpdateBootstrap } from "./hooks/useUpdateBootstrap";
 import { useAppStore } from "./stores/useAppStore";
 import { useSettingsStore } from "./stores/useSettingsStore";
 import { useProfileStore } from "./stores/useProfileStore";
@@ -31,6 +32,7 @@ function App(): JSX.Element {
   useTabsReattach();
   useInPageSearchHotkey();
   useLanProjectsSync();
+  useUpdateBootstrap();
 
   useEffect(() => {
     // 浏览器（局域网客户端）模式：不要把自己 zustand 里可能为空的 settings 推给后端

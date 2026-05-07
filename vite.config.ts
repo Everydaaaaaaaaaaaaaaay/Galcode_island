@@ -1,12 +1,19 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { readFileSync } from "node:fs";
 
 const host = process.env.TAURI_DEV_HOST;
+// 注入 package.json 版本号到前端代码（设置面板 / 自动更新弹窗用）。
+// vite 不会自动暴露 npm_package_version，要 build-time 读取再 define。
+const pkg = JSON.parse(readFileSync("./package.json", "utf-8")) as { version: string };
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

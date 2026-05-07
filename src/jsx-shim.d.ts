@@ -14,4 +14,7 @@ declare global {
     type IntrinsicClassAttributes<T> = React.JSX.IntrinsicClassAttributes<T>;
     type IntrinsicElements = React.JSX.IntrinsicElements;
   }
+
+  /// 由 vite.config.ts 的 `define` 在 build 时注入；值来自 package.json#version
+  const __APP_VERSION__: string;
 }

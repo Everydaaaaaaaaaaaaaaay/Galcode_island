@@ -14,6 +14,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import { useUiStore } from "../../stores/useUiStore";
 import { useTabsStore } from "../../stores/useTabsStore";
 import { useProfileStore } from "../../stores/useProfileStore";
+import { useAboutStore } from "../../stores/useAboutStore";
 import { ProjectTree } from "./ProjectTree";
 import { HistoryList } from "./HistoryList";
 import { SearchPanel } from "./SearchPanel";
@@ -51,6 +52,7 @@ function MenuButton({ label, icon, onClick, active }: MenuButtonProps): JSX.Elem
 export function SidebarLeft(): JSX.Element {
   const openSettingsModal = useSettingsStore((s) => s.openSettingsModal);
   const openProfileModal = useProfileStore((s) => s.openProfileModal);
+  const openAboutModal = useAboutStore((s) => s.openAboutModal);
   const profileNickname = useProfileStore((s) => s.nickname);
   const theme = useAppStore((s) => s.theme);
   const toggleTheme = useAppStore((s) => s.toggleTheme);
@@ -237,6 +239,17 @@ export function SidebarLeft(): JSX.Element {
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className="h-3.5 w-3.5">
               <circle cx="8" cy="6" r="2.5" />
               <path d="M3 13c0-2.4 2.2-4 5-4s5 1.6 5 4" strokeLinecap="round" />
+            </svg>
+          }
+        />
+        <MenuButton
+          label="关于"
+          onClick={openAboutModal}
+          icon={
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className="h-3.5 w-3.5">
+              <circle cx="8" cy="8" r="6.2" />
+              <path d="M8 7.5v3.5" strokeLinecap="round" />
+              <circle cx="8" cy="5.2" r="0.6" fill="currentColor" stroke="none" />
             </svg>
           }
         />

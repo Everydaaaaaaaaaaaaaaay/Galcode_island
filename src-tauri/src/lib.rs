@@ -60,6 +60,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // 自动更新：endpoints / pubkey 在 tauri.conf.json plugins.updater 配置
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // 安装完成后用 process.relaunch() 重启 webview
+        .plugin(tauri_plugin_process::init())
         .manage(Arc::new(AppState::new()))
         .manage(Arc::new(agent::runtime::RuntimeState::default()))
         .manage(Arc::new(lan::LanRuntimeState::default()))
