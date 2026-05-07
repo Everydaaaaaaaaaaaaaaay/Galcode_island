@@ -264,7 +264,12 @@ export interface PickFolderOptions {
   title?: string;
 }
 
-/// 选目录。Tauri 走原生 dialog；浏览器走 window.prompt（手输绝对路径）。
+/// 选目录。
+///   - Tauri 桌面端：走原生 dialog
+///   - 浏览器（移动端 / LAN 客户端）：调 useFolderPickerStore.show() 弹自绘
+///     的目录浏览 modal（后端 list_directory 命令驱动）。该 store 必须在 React
+///     根挂载 <MobileFolderPicker />，否则 Promise 永远 pending —— 兜底用
+///     window.prompt。
 export async function pickFolder(opts: PickFolderOptions = {}): Promise<string | null> {
   if (isTauri) {
     const res = await tauriOpen({
@@ -276,13 +281,20 @@ export async function pickFolder(opts: PickFolderOptions = {}): Promise<string |
     if (!res) return null;
     return Array.isArray(res) ? (res[0] ?? null) : res;
   }
-  const input = window.prompt(
-    opts.title ?? "请输入项目目录的绝对路径",
-    opts.defaultPath ?? "",
-  );
-  if (input === null) return null;
-  const trimmed = input.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  // 动态 import 避免在 Tauri 模式下也加载 store（store 只服务浏览器路径）
+  try {
+    const mod = await import("../stores/useFolderPickerStore");
+    return await mod.useFolderPickerStore.getState().show(opts.defaultPath ?? null);
+  } catch {
+    // store 没装 / 加载失败 → fallback 到原始 prompt
+    const input = window.prompt(
+      opts.title ?? "请输入项目目录的绝对路径",
+      opts.defaultPath ?? "",
+    );
+    if (input === null) return null;
+    const trimmed = input.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
 }
 
 // 启动时如果有 token，立刻把轮询循环跑起来（让组件 listen 之前就开始接收事件）

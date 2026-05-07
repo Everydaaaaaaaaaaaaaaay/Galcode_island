@@ -73,6 +73,81 @@ pub fn select_project_folder(app: AppHandle) -> Result<Option<String>, String> {
     }))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryEntry {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryListing {
+    /// 当前列出的目录的绝对路径
+    pub path: String,
+    /// 父目录的绝对路径；根目录时为 None
+    pub parent: Option<String>,
+    /// 子目录列表（不含文件，按名称排序，跳过点开头的隐藏项）
+    pub entries: Vec<DirectoryEntry>,
+}
+
+/// 列目录子项（仅目录），给移动端 / LAN 客户端做项目目录选择用。
+/// `path` 为 None / 空时返回用户家目录。Tauri 桌面端通常用原生 dialog，
+/// 不会调用本命令，但保留以备 web 调试。
+#[tauri::command]
+pub fn list_directory(path: Option<String>) -> Result<DirectoryListing, String> {
+    let target = match path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(p) => std::path::PathBuf::from(p),
+        None => std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| "无法确定家目录（HOME / USERPROFILE 都没设置）".to_string())?,
+    };
+
+    if !target.exists() {
+        return Err(format!("目录不存在: {}", target.display()));
+    }
+    if !target.is_dir() {
+        return Err(format!("不是目录: {}", target.display()));
+    }
+
+    let read = std::fs::read_dir(&target)
+        .map_err(|e| format!("读目录失败 {}: {e}", target.display()))?;
+
+    let mut entries: Vec<DirectoryEntry> = Vec::new();
+    for item in read {
+        let Ok(entry) = item else { continue };
+        let Ok(file_type) = entry.file_type() else { continue };
+        // 跟随 symlink 目录，但仅列目录
+        if !file_type.is_dir()
+            && !(file_type.is_symlink() && entry.path().is_dir())
+        {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // 跳过点开头隐藏项（避免 .git / .DS_Store / .config 等噪音）
+        if name.starts_with('.') {
+            continue;
+        }
+        entries.push(DirectoryEntry {
+            name,
+            path: entry.path().to_string_lossy().into_owned(),
+        });
+    }
+    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    let parent = target
+        .parent()
+        .filter(|p| p.as_os_str() != target.as_os_str())
+        .map(|p| p.to_string_lossy().into_owned());
+
+    Ok(DirectoryListing {
+        path: target.to_string_lossy().into_owned(),
+        parent,
+        entries,
+    })
+}
+
 /// 中文任务 → 翻译 → 启动 Agent（claude-code / opencode / codex / demo）。
 /// 工作目录默认 `.`，可通过 `cwd` 指定。
 ///

@@ -29,6 +29,12 @@ fn to_value<T: serde::Serialize>(v: T) -> Result<Value, String> {
 
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+struct ListDirectoryArgs {
+    path: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 struct StartAgentArgs {
     user_input_zh: String,
     cwd: Option<String>,
@@ -300,6 +306,10 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
         "select_project_folder" => {
             let v = commands::select_project_folder(app.clone())?;
             to_value(v)
+        }
+        "list_directory" => {
+            let p: ListDirectoryArgs = parse(args)?;
+            to_value(commands::list_directory(p.path)?)
         }
         "list_sessions" => to_value(commands::list_sessions(app_state)?),
         "start_agent" => {

@@ -23,11 +23,11 @@ use ipc::commands::{
     codex_login_open, codex_send_prompt, codex_status, codex_verify, finalize_pending,
     get_session_logs, lan_clear_password, lan_get_state, lan_get_storage, lan_list_storage,
     lan_remove_storage, lan_revoke_all_devices, lan_set_enabled, lan_set_password, lan_set_port,
-    lan_set_storage, lan_sync_projects, list_llm_models, list_sessions, opencode_create_session,
-    opencode_list_providers, opencode_login_open, opencode_send_prompt, opencode_set_auth,
-    opencode_start, opencode_status, opencode_stop, respond_permission, select_project_folder,
-    set_click_through, start_agent, stop_agent, translate_only, update_backend_preferences,
-    update_llm_settings,
+    lan_set_storage, lan_sync_projects, list_directory, list_llm_models, list_sessions,
+    opencode_create_session, opencode_list_providers, opencode_login_open, opencode_send_prompt,
+    opencode_set_auth, opencode_start, opencode_status, opencode_stop, respond_permission,
+    select_project_folder, set_click_through, start_agent, stop_agent, translate_only,
+    update_backend_preferences, update_llm_settings,
 };
 use std::sync::Arc;
 
@@ -144,6 +144,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // 通用
             select_project_folder,
+            list_directory,
             start_agent,
             stop_agent,
             respond_permission,
