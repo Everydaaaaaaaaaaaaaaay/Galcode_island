@@ -26,3 +26,4 @@ dist-ssr
 # Local tools
 .claude/
 docs/auto-update.md
+docs/release.md

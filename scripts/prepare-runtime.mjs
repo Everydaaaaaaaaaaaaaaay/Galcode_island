@@ -15,8 +15,8 @@
 //   - chmod 0o755（Unix 上 npm 包里 binary 默认就是可执行的，保险起见）
 //   - 失败容错：单个 CLI 失败不影响其它两个
 
-import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, openSync, readdirSync, readSync, closeSync, statSync } from "node:fs";
 import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -38,6 +38,10 @@ const args = process.argv.slice(2);
 const skipClaude = args.includes("--skip-claude");
 const skipCodex = args.includes("--skip-codex");
 const skipOpencode = args.includes("--skip-opencode");
+// --sign：仅 macOS 用；公证流水线需要 bundled binaries 已经各自签好名 + 附 JIT
+// entitlements，否则后续 fix-bundle-signatures.mjs 重新 codesign 时整个 .app 会
+// 因为内部 binary 没签过被 Gatekeeper 拒绝。dev / 本地 build 时不传 --sign。
+const wantSign = args.includes("--sign");
 
 function binaryName(base) {
   return isWindows ? `${base}.exe` : base;
@@ -204,9 +208,121 @@ async function main() {
     } else {
       console.log("\nDone.");
     }
+
+    // macOS + --sign：对 staged 的 native binaries 做 codesign + 附加 JIT entitlements。
+    // 公证要求 .app 内每个 Mach-O 都已经签名；fix-bundle-signatures.mjs 在
+    // tauri build 之后会再补签一次，但仅在每个 binary 已经先签过的前提下成立
+    // （未签过的 binary tauri 内部的 codesign --force 流程会拿不到锚点）。
+    if (wantSign && platform === "darwin") {
+      const signingIdentity = (process.env.APPLE_SIGNING_IDENTITY || "").trim();
+      if (!signingIdentity) {
+        console.warn("--sign 已传但 APPLE_SIGNING_IDENTITY 为空；跳过 macOS bundled binary 签名。");
+      } else {
+        const signed = signMacOSBundledBinaries(runtimeDir, signingIdentity);
+        if (signed) {
+          console.log(`\nSigned ${signed} bundled native binaries with "${signingIdentity}".`);
+        } else {
+          console.log("\nNo bundled native binaries to sign.");
+        }
+      }
+    }
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
+}
+
+// ---------- macOS bundled binary 签名（仅 --sign 流水线用） ----------
+
+function isMachOBinary(filePath) {
+  let fd;
+  try {
+    fd = openSync(filePath, "r");
+    const buf = Buffer.alloc(4);
+    const bytesRead = readSync(fd, buf, 0, 4, 0);
+    if (bytesRead < 4) return false;
+    const magic = buf.readUInt32BE(0);
+    return (
+      magic === 0xfeedface ||
+      magic === 0xfeedfacf ||
+      magic === 0xcefaedfe ||
+      magic === 0xcffaedfe ||
+      magic === 0xcafebabe ||
+      magic === 0xbebafeca
+    );
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function findNativeBinaries(baseDir) {
+  const found = [];
+  function walk(dir) {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (ext === ".node" && isMachOBinary(full)) {
+        found.push(full);
+      } else if (!ext && isMachOBinary(full)) {
+        found.push(full);
+      }
+    }
+  }
+  walk(baseDir);
+  return found;
+}
+
+function signMacOSBundledBinaries(baseDir, identity) {
+  if (!existsSync(baseDir)) return 0;
+  const binaries = findNativeBinaries(baseDir);
+  if (!binaries.length) return 0;
+
+  const entitlementsPath = path.join(rootDir, "src-tauri", "resources", "runtime-entitlements.plist");
+  const hasEntitlements = existsSync(entitlementsPath);
+  if (!hasEntitlements) {
+    console.warn(
+      "Warning: src-tauri/resources/runtime-entitlements.plist not found；签名时不附加 JIT entitlements，"
+      + "Node.js / V8 在 hardened runtime 下会 crash。",
+    );
+  }
+
+  console.log(`\nSigning ${binaries.length} native binaries for macOS notarization...`);
+  let signed = 0;
+  for (const binary of binaries) {
+    const relative = path.relative(baseDir, binary);
+    try {
+      const codesignArgs = [
+        "--force",
+        "--options", "runtime",
+        "--timestamp",
+        "--sign", identity,
+      ];
+      // 可执行二进制（非 .node）需要 JIT entitlements
+      if (hasEntitlements && path.extname(binary).toLowerCase() !== ".node") {
+        codesignArgs.push("--entitlements", entitlementsPath);
+      }
+      codesignArgs.push(binary);
+      execFileSync("codesign", codesignArgs, { stdio: "pipe" });
+      console.log(`  Signed: ${relative}${codesignArgs.includes("--entitlements") ? " (JIT)" : ""}`);
+      signed += 1;
+    } catch (error) {
+      const msg = String(error.stderr || error.message || "").trim();
+      console.warn(`  Skipped: ${relative} (${msg || "codesign failed"})`);
+    }
+  }
+  return signed;
 }
 
 main().catch((error) => {

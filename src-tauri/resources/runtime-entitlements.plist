@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- claude / codex / opencode 都是 Node.js / V8 / JavaScriptCore JIT；
+         在 hardened runtime 下必须显式豁免，否则启动时 EXC_BAD_ACCESS。 -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <!-- JIT 引擎需要分配可执行内存页。 -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- 加载 .node 原生模块（如 better-sqlite3 / uiohook 等）需要绕过 library validation。 -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
