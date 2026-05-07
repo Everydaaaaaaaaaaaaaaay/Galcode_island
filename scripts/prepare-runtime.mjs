@@ -112,9 +112,24 @@ async function stageBinary(kind, sourcePath) {
   return dest;
 }
 
+/// 幂等检查：runtime/<kind>/<binary> 已存在 → 这一份已经 stage 过，
+/// 跳过 npm install + 重 stage。避免 CI 里 prepare-runtime --sign 之后
+/// tauri build 通过 beforeBuildCommand 二次跑 prepare-runtime 时覆盖签名。
+/// `--force` 标志强制重装（用户改了 CLI 版本号需要拉新版时用）。
+const wantForce = args.includes("--force");
+function isAlreadyStaged(kind) {
+  if (wantForce) return false;
+  const exe = path.join(runtimeDir, kind, binaryName(kind));
+  return existsSync(exe);
+}
+
 async function prepareOpencode(tmpDir) {
   if (skipOpencode) {
     console.log("[opencode] skipped");
+    return;
+  }
+  if (isAlreadyStaged("opencode")) {
+    console.log("[opencode] already staged, skipping (--force to re-install)");
     return;
   }
   console.log("[opencode]");
@@ -132,6 +147,10 @@ async function prepareCodex(tmpDir) {
     console.log("[codex] skipped");
     return;
   }
+  if (isAlreadyStaged("codex")) {
+    console.log("[codex] already staged, skipping (--force to re-install)");
+    return;
+  }
   console.log("[codex]");
   npmInstall(tmpDir, "@openai/codex");
   const fileName = binaryName("codex");
@@ -145,6 +164,10 @@ async function prepareCodex(tmpDir) {
 async function prepareClaude(tmpDir) {
   if (skipClaude) {
     console.log("[claude] skipped (use --skip-claude / Anthropic 专有许可证敏感时建议跳过)");
+    return;
+  }
+  if (isAlreadyStaged("claude")) {
+    console.log("[claude] already staged, skipping (--force to re-install)");
     return;
   }
   console.log("[claude]");
