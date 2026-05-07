@@ -66,8 +66,8 @@ fn version_cache_put(key: String, value: Option<String>) {
 pub fn command_version<S: AsRef<OsStr>>(binary: S, flag: &str, cwd: &Path) -> Option<String> {
     let binary_ref = binary.as_ref();
     let cache_key = format!("v1|{}|{}", binary_ref.to_string_lossy(), flag);
-    if let Some(cached) = version_cache_get(&cache_key) {
-        return cached;
+    if let Some(Some(cached)) = version_cache_get(&cache_key) {
+        return Some(cached);
     }
 
     let mut command = Command::new(binary_ref);
@@ -84,7 +84,13 @@ pub fn command_version<S: AsRef<OsStr>>(binary: S, flag: &str, cwd: &Path) -> Op
         .map(|output| trim_output(&output.stdout))
         .filter(|value| !value.is_empty());
 
-    version_cache_put(cache_key, result.clone());
+    // 只缓存成功结果。原因：fresh 启动时 macOS syspolicyd / Windows Defender 第一次
+    // 对未签名 npm-staged binary 做策略扫描，spawn 经常超过 5s timeout 失败。如果把
+    // None 也缓存 5min，用户手动跑过一次 CLI 暖了系统缓存后回到应用仍然读到陈旧的
+    // None，"检测不到" 直到 cache 过期。失败重试的成本只是再 spawn 一次，可以接受。
+    if let Some(ref value) = result {
+        version_cache_put(cache_key, Some(value.clone()));
+    }
     result
 }
 
@@ -100,8 +106,8 @@ pub fn command_version_with_args(
         leading_args.join(" "),
         flag
     );
-    if let Some(cached) = version_cache_get(&cache_key) {
-        return cached;
+    if let Some(Some(cached)) = version_cache_get(&cache_key) {
+        return Some(cached);
     }
 
     let mut command = Command::new(binary);
@@ -118,7 +124,11 @@ pub fn command_version_with_args(
         .map(|output| trim_output(&output.stdout))
         .filter(|value| !value.is_empty());
 
-    version_cache_put(cache_key, result.clone());
+    // 同 command_version：只缓存成功结果，避免首次 spawn 撞策略扫描 timeout 之后被
+    // 5min 负面 cache 卡住。
+    if let Some(ref value) = result {
+        version_cache_put(cache_key, Some(value.clone()));
+    }
     result
 }
 
@@ -439,9 +449,68 @@ pub fn stage_bundled_runtime_binary(app: &AppHandle, kind: &str) -> Result<PathB
     Ok(destination)
 }
 
+// macOS GUI 启动的 .app 进程 PATH 由 launchd 给的最小集合 `/usr/bin:/bin:/usr/sbin:/sbin`
+// 组成，不含用户配置的 brew (`/opt/homebrew/bin`) / npm 全局 (`~/.npm-global/bin` /
+// `~/.nvm/.../bin`) 等路径。结果就是用户在 terminal 能跑 `claude --version`，但产物
+// .app 双击启动后 spawn `claude` 直接 ENOENT。
+//
+// 修复：bundled binary 不存在时（比如 claude 是 wrapper 脚本未 bundle），通过用户
+// login shell 拿到真正的 PATH 再做 lookup。Linux / Windows 进程默认就继承用户环境，
+// 不需要这一层。
+//
+// 缓存策略：spawn shell 不便宜，PATH 一般不变 → 全程缓存一次。
+static USER_SHELL_PATH: LazyLock<Option<String>> = LazyLock::new(|| {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let shell = std::env::var("SHELL").ok()?;
+    let mut command = Command::new(&shell);
+    configure_background_command(&mut command);
+    let output = command
+        .args(["-l", "-c", "echo -n $PATH"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8(output.stdout).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+});
+
+fn lookup_in_user_shell_path(name: &str) -> Option<PathBuf> {
+    let path_env = USER_SHELL_PATH.as_ref()?;
+    let exe_name = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    for dir in path_env.split(':') {
+        if dir.is_empty() {
+            continue;
+        }
+        let candidate = PathBuf::from(dir).join(&exe_name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// bundled 不存在时的兜底 path：先查 user shell 的真实 PATH，最后才退回到裸名字
+/// （让 std::process::Command 自己走系统 PATH 兜兜兜底）。
+fn fallback_binary_path(name: &str) -> PathBuf {
+    lookup_in_user_shell_path(name).unwrap_or_else(|| PathBuf::from(name))
+}
+
 pub fn resolve_node_binary(app: &AppHandle) -> PathBuf {
-    stage_bundled_runtime_binary(app, "node")
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_NODE_BINARY))
+    stage_bundled_runtime_binary(app, "node").unwrap_or_else(|_| fallback_binary_path(DEFAULT_NODE_BINARY))
 }
 
 pub fn resolve_opencode_binary(app: &AppHandle, requested: Option<&str>) -> PathBuf {
@@ -452,7 +521,7 @@ pub fn resolve_opencode_binary(app: &AppHandle, requested: Option<&str>) -> Path
 
     if desired == DEFAULT_OPENCODE_BINARY {
         return stage_bundled_runtime_binary(app, "opencode")
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_OPENCODE_BINARY));
+            .unwrap_or_else(|_| fallback_binary_path(DEFAULT_OPENCODE_BINARY));
     }
 
     normalize_requested_binary_path(PathBuf::from(desired))
@@ -466,7 +535,7 @@ pub fn resolve_codex_binary(app: &AppHandle, requested: Option<&str>) -> PathBuf
 
     if desired == DEFAULT_CODEX_BINARY {
         return stage_bundled_runtime_binary(app, "codex")
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_CODEX_BINARY));
+            .unwrap_or_else(|_| fallback_binary_path(DEFAULT_CODEX_BINARY));
     }
 
     normalize_requested_binary_path(PathBuf::from(desired))
@@ -480,7 +549,7 @@ pub fn resolve_claude_binary(app: &AppHandle, requested: Option<&str>) -> PathBu
 
     if desired == DEFAULT_CLAUDE_BINARY {
         return stage_bundled_runtime_binary(app, "claude")
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_CLAUDE_BINARY));
+            .unwrap_or_else(|_| fallback_binary_path(DEFAULT_CLAUDE_BINARY));
     }
 
     normalize_requested_binary_path(PathBuf::from(desired))
