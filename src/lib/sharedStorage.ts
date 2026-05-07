@@ -1,0 +1,231 @@
+// 跨设备共享的 zustand persist storage adapter。
+//
+// 桌面端是唯一权威：
+//   - Tauri 模式：走本地 localStorage（保持桌面端启动时同步可用）；setItem 后
+//     **额外**把 JSON 推到 Rust 镜像（lan_set_storage），让移动端能拉到。
+//   - 浏览器（LAN）模式：没有桌面端的 localStorage（手机本地是空的），所以
+//     getItem 直接调 lan_get_storage 拿桌面端推上来的 JSON 做 hydrate，
+//     setItem 直接 invoke 推回去并广播事件。
+//
+// 双向同步靠 storage://changed 事件广播：
+//   - 任一客户端写入后端镜像后，所有其它客户端收到事件 → 调 onExternalChange 回调
+//     → 触发 zustand 的 useStore.persist.rehydrate() → 重新 getItem → setState
+//   - 写入方自己也会收到事件（Tauri 自己 emit 的 listener 也会监听到），用 source
+//     clientId 比对跳过自己的回声，避免无限 rehydrate 循环
+//
+// 防回环关键点：
+//   - 客户端启动时生成 32 位随机 clientId
+//   - setItem / removeItem 时把 clientId 作为 source 一起发给后端
+//   - 后端原样把 source 放进事件 payload
+//   - 客户端 listener 收到 source === self.clientId 时直接 ignore
+
+import type { PersistStorage, StorageValue } from "zustand/middleware";
+import { invoke, isTauri, listen } from "./bridge";
+
+const CLIENT_ID = generateClientId();
+
+function generateClientId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function getClientId(): string {
+  return CLIENT_ID;
+}
+
+// ---------------------------------------------------------------------------
+// 外部变化 dispatch：每个 store 用 createSharedStorage 时注册自己的 onExternalChange
+// 回调。后端事件到达时按 key 路由到对应 store 的回调。
+// ---------------------------------------------------------------------------
+
+type ExternalListener = (rawValue: string | null, source: string) => void;
+const externalListeners = new Map<string, Set<ExternalListener>>();
+
+function ensureListener(key: string): Set<ExternalListener> {
+  let set = externalListeners.get(key);
+  if (!set) {
+    set = new Set();
+    externalListeners.set(key, set);
+  }
+  return set;
+}
+
+export function onStorageExternalChange(key: string, cb: ExternalListener): () => void {
+  const set = ensureListener(key);
+  set.add(cb);
+  return () => set.delete(cb);
+}
+
+let globalListenerInstalled = false;
+
+function installGlobalListener(): void {
+  if (globalListenerInstalled) return;
+  globalListenerInstalled = true;
+  void listen<{ key: string; value: string; source: string }>(
+    "storage://changed",
+    (e) => {
+      const { key, value, source } = e.payload;
+      if (source === CLIENT_ID) return;
+      // 关键：把远端写入同步到**本端 localStorage**，让后续 rehydrate 调 getItem
+      // 时拿到最新 value（Tauri 桌面端 getItem 同步读 localStorage，不读后端镜像；
+      // 没有这步就会用本地旧值反向覆盖后端，对方的更新就丢了）
+      if (typeof localStorage !== "undefined") {
+        try {
+          localStorage.setItem(key, value);
+        } catch {
+          /* quota，忽略 */
+        }
+      }
+      const handlers = externalListeners.get(key);
+      if (!handlers || handlers.size === 0) return;
+      for (const h of handlers) h(value, source);
+    },
+  );
+  void listen<{ key: string; source: string }>("storage://removed", (e) => {
+    const { key, source } = e.payload;
+    if (source === CLIENT_ID) return;
+    if (typeof localStorage !== "undefined") {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        /* ignore */
+      }
+    }
+    const handlers = externalListeners.get(key);
+    if (!handlers || handlers.size === 0) return;
+    for (const h of handlers) h(null, source);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// PersistStorage 实现
+// ---------------------------------------------------------------------------
+
+export interface SharedStorageOptions {
+  /// 写 localStorage 失败（多半是 QuotaExceededError）时调用。返回 true 表示
+  /// 已经处理（外层 setItem 不再重试）；返回 false / 抛错表示放弃。
+  /// 默认：直接吞掉错误（已经写到后端镜像，本地丢失也能从远端恢复）。
+  onLocalQuotaError?: (key: string, raw: string, err: unknown) => boolean | void;
+}
+
+/// 创建一份"双端共享、桌面权威"的 zustand persist storage。
+///
+/// 这里返回 PersistStorage<any> 是有意为之：zustand persist 的 storage option
+/// 期望 `PersistStorage<PersistedState>`（即 partialize 输出类型），不同 store
+/// partialize 不一样很难抽公共类型 —— 让 `any` 当 type-erasure 通道，由 zustand
+/// 内部按 store 的 PersistedState 自动对齐 setItem/getItem。
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createSharedStorage(
+  options: SharedStorageOptions = {},
+): PersistStorage<any> {
+  installGlobalListener();
+  // T 已被擦除；adapter 内部按 unknown JSON value 处理
+  type AnyValue = StorageValue<unknown>;
+  const adapter: PersistStorage<unknown> = {
+    // Tauri 桌面端：同步从 localStorage 读 —— 这一步必须同步！否则 zustand persist
+    // 在 store 创建时启动 hydrate，hydrate 是 await getItem 后 setState；用户刚启动
+    // 就切 tab / 改设置时，setState 发生在 hydrate 之前，等 hydrate 拿到旧 JSON
+    // 再 setState 会把用户刚做的修改回滚（"切 tab 切回原状态"、"流式区 cliBlocks
+    // 被 persisted 老快照覆盖"等 bug 都源于此）。
+    //
+    // 浏览器（LAN 客户端）：没有桌面端 localStorage，必须 await invoke 拉后端镜像。
+    // 但浏览器刚加载时用户还没机会交互，hydrate 完成后 setState 不会冲突。
+    getItem: (name: string): AnyValue | null | Promise<AnyValue | null> => {
+      if (isTauri && typeof localStorage !== "undefined") {
+        const local = localStorage.getItem(name);
+        return local !== null ? parseStorageValue(local) : null;
+      }
+      return (async (): Promise<AnyValue | null> => {
+        try {
+          const raw = await invoke<string | null>("lan_get_storage", { key: name });
+          if (raw === null || raw === undefined) return null;
+          return parseStorageValue(raw);
+        } catch {
+          return null;
+        }
+      })();
+    },
+
+    setItem: (name, value) => {
+      const raw = JSON.stringify(value);
+      if (typeof localStorage !== "undefined") {
+        try {
+          localStorage.setItem(name, raw);
+        } catch (err) {
+          if (options.onLocalQuotaError) {
+            try { options.onLocalQuotaError(name, raw, err); } catch { /* ignore */ }
+          }
+        }
+      }
+      // 推到 Rust 镜像 —— **fire-and-forget，不 await**，让 setItem 同步返回。
+      // zustand persist 在 setItem 同步完成时也走同步路径，避免"setState 触发的
+      // setItem 还没完成时 hydrate 又过来 setState"的竞态。后端写入失败也无所谓:
+      // localStorage 是真相，下次 setItem 会再推一次。
+      //
+      // notifyWebview: !isTauri —— 桌面 webview 自己发的事件不需要 app.emit 回到
+      // 自己（已经在自己端写过 state，回声只能被 source 比对跳过）；浏览器（移动端）
+      // 发的需要让桌面 webview 收到 → 用默认 true 触发 app.emit。
+      void invoke("lan_set_storage", {
+        key: name,
+        value: raw,
+        source: CLIENT_ID,
+        notifyWebview: !isTauri,
+      }).catch((err) => {
+        console.warn("[shared-storage] push to backend failed", err);
+      });
+    },
+
+    removeItem: (name) => {
+      if (typeof localStorage !== "undefined") {
+        try { localStorage.removeItem(name); } catch { /* ignore */ }
+      }
+      void invoke("lan_remove_storage", {
+        key: name,
+        source: CLIENT_ID,
+        notifyWebview: !isTauri,
+      }).catch((err) => console.warn("[shared-storage] remove on backend failed", err));
+    },
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return adapter as PersistStorage<any>;
+}
+
+function parseStorageValue(raw: string): StorageValue<unknown> | null {
+  try {
+    return JSON.parse(raw) as StorageValue<unknown>;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 对外辅助：让 store rehydrate / 直接 push 到后端
+// ---------------------------------------------------------------------------
+
+/// 显式把当前 localStorage 里某个 key 的值同步推到后端。桌面端启动时如果用户
+/// 从老 localStorage 升级而来（还没有触发任何 setItem），可以调这个让镜像立刻
+/// 包含老数据。一般 createSharedStorage.getItem 已经走过这条路；这里作为兜底。
+export async function pushLocalToRemote(key: string): Promise<void> {
+  if (!isTauri || typeof localStorage === "undefined") return;
+  const raw = localStorage.getItem(key);
+  if (raw === null) return;
+  try {
+    await invoke("lan_set_storage", { key, value: raw, source: CLIENT_ID });
+  } catch (err) {
+    console.warn(`[shared-storage] push ${key} failed`, err);
+  }
+}
+
+/// 仅浏览器模式：启动时一次性拉所有镜像 key/value，写入本地（虚拟）storage。
+/// 主要用于 LanLoginGate 完成登录后让所有 zustand store 第一时间拿到桌面端数据。
+/// 实际上各 store 自己调 persist.rehydrate() 也能拿到，这里是备用接口。
+export async function fetchAllStorageEntries(): Promise<[string, string][]> {
+  if (isTauri) return [];
+  try {
+    return await invoke<[string, string][]>("lan_list_storage");
+  } catch {
+    return [];
+  }
+}

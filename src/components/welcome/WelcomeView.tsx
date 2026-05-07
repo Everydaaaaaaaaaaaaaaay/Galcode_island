@@ -1,4 +1,4 @@
-import { open } from "@tauri-apps/plugin-dialog";
+import { pickFolder } from "../../lib/bridge";
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useState } from "react";
 import { useAppStore } from "../../stores/useAppStore";
@@ -63,9 +63,8 @@ export function WelcomeView(): JSX.Element {
   const pickProjectFolder = useCallback(async (): Promise<void> => {
     setIsSelecting(true);
     try {
-      const result = await open({ directory: true });
-      if (!result) return;
-      const path = Array.isArray(result) ? result[0] : result;
+      const path = await pickFolder({ title: "选择项目目录" });
+      if (!path) return;
       setPendingProjectPath(path);
     } finally {
       setIsSelecting(false);
@@ -90,21 +89,21 @@ export function WelcomeView(): JSX.Element {
   const isReady = Boolean(projectPath);
 
   return (
-    <section className="relative mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-[28px] border border-white/60 bg-white/70 px-10 pb-0 shadow-[0_20px_60px_rgba(0,0,0,0.06)] backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60 dark:shadow-none">
+    <section className="relative mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-[20px] border border-white/60 bg-white/70 px-4 pb-0 shadow-[0_20px_60px_rgba(0,0,0,0.06)] backdrop-blur-2xl sm:rounded-[28px] sm:px-6 lg:px-10 dark:border-white/10 dark:bg-slate-800/60 dark:shadow-none">
       <div data-tauri-drag-region className="h-[30px] w-full shrink-0" />
 
       <motion.div
         initial={{ opacity: 0, y: 14 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.55, ease: "easeOut" }}
-        className="flex flex-1 flex-col items-center justify-center gap-8"
+        className="flex flex-1 flex-col items-center justify-center gap-5 sm:gap-8"
       >
-        {/* Apple-style handwriting reveal title */}
+        {/* Apple-style handwriting reveal title —— 字号随屏宽缩放 */}
         <motion.h1
           variants={titleVariants}
           initial="hidden"
           animate="visible"
-          className="flex flex-wrap justify-center gap-x-[0.05em] text-center text-5xl font-bold italic tracking-tight text-zinc-800 dark:text-zinc-100 font-serif"
+          className="flex flex-wrap justify-center gap-x-[0.05em] text-center text-3xl font-bold italic tracking-tight text-zinc-800 sm:text-4xl lg:text-5xl dark:text-zinc-100 font-serif"
           style={{ fontVariationSettings: "'wght' 700" }}
         >
           {titleChars.map((char, i) => (
@@ -119,14 +118,14 @@ export function WelcomeView(): JSX.Element {
           ))}
         </motion.h1>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-center gap-3">
           <motion.button
             whileHover={{ y: -2, scale: 1.01 }}
             whileTap={{ scale: 0.985 }}
             type="button"
             onClick={handlePrimaryAction}
             disabled={isSelecting}
-            className={`min-w-36 border px-5 py-2.5 text-sm font-medium backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70 ${
+            className={`min-h-[44px] min-w-[120px] border px-5 py-3 text-sm font-medium backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70 sm:min-h-0 sm:min-w-36 sm:py-2.5 ${
               isReady
                 ? "rounded-2xl border-sky-400/50 bg-sky-400/25 text-zinc-900 shadow-sky-400/15 dark:border-sky-400/40 dark:bg-sky-500/30 dark:text-zinc-100"
                 : "rounded-xl border-white/30 bg-white/20 text-zinc-800 dark:border-white/15 dark:bg-white/10 dark:text-zinc-100"
@@ -141,7 +140,7 @@ export function WelcomeView(): JSX.Element {
               whileHover={{ y: -2, scale: 1.01 }}
               whileTap={{ scale: 0.985 }}
               onClick={() => setIsAgentMenuOpen((prev) => !prev)}
-              className="min-w-40 rounded-2xl border border-white/30 bg-white/20 px-4 py-2.5 text-sm text-zinc-800 backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:bg-white/30 hover:shadow-lg dark:border-white/15 dark:bg-white/10 dark:text-zinc-100"
+              className="min-h-[44px] min-w-[140px] rounded-2xl border border-white/30 bg-white/20 px-4 py-3 text-sm text-zinc-800 backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:bg-white/30 hover:shadow-lg sm:min-h-0 sm:min-w-40 sm:py-2.5 dark:border-white/15 dark:bg-white/10 dark:text-zinc-100"
               aria-haspopup="listbox"
               aria-expanded={isAgentMenuOpen}
             >
@@ -162,7 +161,7 @@ export function WelcomeView(): JSX.Element {
                     <li key={option.value}>
                       <button
                         type="button"
-                        className={`w-full rounded-xl px-3 py-2 text-left text-sm text-zinc-800 transition-all duration-300 hover:-translate-y-0.5 hover:bg-white/40 hover:shadow-md dark:text-zinc-100 dark:hover:bg-white/10 ${
+                        className={`w-full min-h-[40px] rounded-xl px-3 py-2.5 text-left text-sm text-zinc-800 transition-all duration-300 hover:-translate-y-0.5 hover:bg-white/40 hover:shadow-md sm:min-h-0 sm:py-2 dark:text-zinc-100 dark:hover:bg-white/10 ${
                           selectedAgent === option.value ? "bg-white/40 shadow-md dark:bg-white/10" : ""
                         }`}
                         onClick={() => {
@@ -186,7 +185,7 @@ export function WelcomeView(): JSX.Element {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
-              className="max-w-2xl rounded-xl border border-white/60 bg-white/70 px-3 py-2 text-center text-xs text-zinc-700 backdrop-blur-md dark:border-white/10 dark:bg-slate-800/60 dark:text-zinc-300"
+              className="max-w-full break-all rounded-xl border border-white/60 bg-white/70 px-3 py-2 text-center text-xs text-zinc-700 backdrop-blur-md sm:max-w-2xl sm:break-normal dark:border-white/10 dark:bg-slate-800/60 dark:text-zinc-300"
             >
               当前项目：{projectPath}
             </motion.p>
@@ -194,8 +193,8 @@ export function WelcomeView(): JSX.Element {
         </AnimatePresence>
       </motion.div>
 
-      {/* Interactive pet character at bottom */}
-      <div className="flex h-56 w-full items-end justify-center pb-2">
+      {/* Interactive pet character at bottom —— 移动端容器缩矮，桌宠保留视觉 */}
+      <div className="flex h-40 w-full items-end justify-center pb-2 sm:h-48 lg:h-56">
         <PetCharacter />
       </div>
     </section>

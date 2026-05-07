@@ -19,6 +19,13 @@ interface UiState {
   leftSidebarView: LeftSidebarView;
   setLeftSidebarView: (view: LeftSidebarView) => void;
 
+  /// 移动端 / 窄屏（< lg 断点）下，左栏抽屉是否展开。桌面端忽略此字段（左栏一直在）。
+  /// 默认收起。点击 MobileTopBar 的汉堡按钮 / 选中某项后自动关闭。
+  mobileLeftDrawerOpen: boolean;
+  openMobileLeftDrawer: () => void;
+  closeMobileLeftDrawer: () => void;
+  toggleMobileLeftDrawer: () => void;
+
   /// 页内搜索（cmd+f 触发）：跟"全局搜索"不同，只搜当前 active tab 的 cliBlocks。
   /// open=true 时右上角浮窗显示。
   ///
@@ -49,6 +56,12 @@ export const useUiStore = create<UiState>((set) => ({
 
   leftSidebarView: "projects",
   setLeftSidebarView: (view) => set({ leftSidebarView: view }),
+
+  mobileLeftDrawerOpen: false,
+  openMobileLeftDrawer: () => set({ mobileLeftDrawerOpen: true }),
+  closeMobileLeftDrawer: () => set({ mobileLeftDrawerOpen: false }),
+  toggleMobileLeftDrawer: () =>
+    set((s) => ({ mobileLeftDrawerOpen: !s.mobileLeftDrawerOpen })),
 
   inPageSearchOpen: false,
   searchQuery: "",

@@ -12,7 +12,8 @@
 // 到对应 tab slice。
 
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
+import { persist } from "zustand/middleware";
+import { createSharedStorage, onStorageExternalChange } from "../lib/sharedStorage";
 import type {
   AgentStatus,
   AgentType,
@@ -209,34 +210,38 @@ const PERSIST_BLOCKS_PER_TAB = 120;
 /// 但要保留结果态让 ResultCard 重启后能显示上次完成的总结。
 const MODE_RESULT_STATES = new Set(["complete", "suggestion", "error", "idle"]);
 
-/// 准备 localStorage 快照：保留过去工作进度（cliBlocks / task / 上次结果），
-/// 只重置真正"运行时一次性"的字段。
+/// **写入** persist 时仅做 cliBlocks 裁剪（防 localStorage 配额炸）。
+/// **不重置**运行态字段（uiState / agentStatus / mode / percent / bubble / lastStage）
+/// —— 跨设备实时同步必须保留这些字段：移动端切到 running，桌面端 rehydrate 也要看到 running。
+/// 旧版本在 partialize 把这些重置成 idle，导致 setState({uiState:"running"}) 立即被
+/// 自己写入的 storage 反向覆盖回 idle，移动端"启动"按钮按了像没反应。
+function compactTabForPersist(tab: TabState): TabState {
+  const trimmedBlocks =
+    tab.cliBlocks.length > PERSIST_BLOCKS_PER_TAB
+      ? tab.cliBlocks.slice(-PERSIST_BLOCKS_PER_TAB)
+      : tab.cliBlocks;
+  if (trimmedBlocks === tab.cliBlocks) return tab;
+  return { ...tab, cliBlocks: trimmedBlocks };
+}
+
+/// **首次 hydrate（页面 reload / app 重启）** 时清掉过期的运行态。
+/// 后续手动 rehydrate（来自跨设备 storage://changed 事件）**不**调用本函数 ——
+/// 那是同步另一端的真实运行态，要原样保留。
 ///   - percent / bubble：进度文字，进程已死无意义
 ///   - agentStatus / uiState：运行状态由 reattach + 实际 list_sessions 决定
 ///   - mode：过程态（thinking/working）一律改 idle，否则重启后 RunningBubble 会
 ///     误判"还在跑"显示"AGENT 正在全力执行…"；结果态（complete/suggestion/error）
 ///     保留让 ResultCard 能续显示上次总结
-/// 保留：
-///   - cliBlocks：BlockStream 重启后能继续显示上次工作的全过程（裁剪到最近 N 块）
-///   - task：输入框半成品，让用户切回来继续打
-///   - hasUnread：跨 tab 红点状态保留，用户能记住哪个 tab 还没看
-///   - resultZh / summary / emotion / suggestionOptions：右下结果卡内容
-///   - lastStage：影响 PetCharacter 立绘
-function sanitizeTabForPersist(tab: TabState): TabState {
-  const trimmedBlocks =
-    tab.cliBlocks.length > PERSIST_BLOCKS_PER_TAB
-      ? tab.cliBlocks.slice(-PERSIST_BLOCKS_PER_TAB)
-      : tab.cliBlocks;
+function sanitizeTabOnInitialLoad(tab: TabState): TabState {
   // 过程态的 mode 改 idle；结果态保留
   const sanitizedMode = MODE_RESULT_STATES.has(tab.mode) ? tab.mode : "idle";
-  // lastStage 同理：thinking / working / init 都是过程态，重置为 default 让
-  // PetCharacter 不卡在"思考"立绘
-  const lastStage = tab.lastStage === "thinking" || tab.lastStage === "working" || tab.lastStage === "init"
-    ? "default"
-    : tab.lastStage;
+  // lastStage 同理：thinking / working / init 都是过程态，重置为 default
+  const lastStage =
+    tab.lastStage === "thinking" || tab.lastStage === "working" || tab.lastStage === "init"
+      ? "default"
+      : tab.lastStage;
   return {
     ...tab,
-    cliBlocks: trimmedBlocks,
     percent: 0,
     bubble: "",
     agentStatus: "idle",
@@ -245,6 +250,11 @@ function sanitizeTabForPersist(tab: TabState): TabState {
     lastStage,
   };
 }
+
+/// module-level flag：第一次 hydrate（store 创建瞬间）= true；
+/// 后续 useTabsStore.persist.rehydrate()（跨设备同步触发）= false。
+/// 这样首次清运行态、跨设备同步保留运行态。
+let isFirstTabsHydration = true;
 
 export const useTabsStore = create<TabsStoreState>()(
   persist<TabsStoreState>(
@@ -468,62 +478,65 @@ export const useTabsStore = create<TabsStoreState>()(
     {
       name: "galcode_tabs",
       version: 1,
-      // 自定义 storage：撞 localStorage 配额（QuotaExceededError）时不让
-      // zustand 整个写失败 —— 改为逐 tab 把 cliBlocks 砍半重试，确保至少
-      // tab 列表 / 上次结果能存进去。最差情况下完全丢 cliBlocks 也能继续工作。
-      storage: createJSONStorage(() => ({
-        getItem: (k) => localStorage.getItem(k),
-        removeItem: (k) => localStorage.removeItem(k),
-        setItem: (k, v) => {
-          try {
-            localStorage.setItem(k, v);
-            return;
-          } catch (err) {
-            if (!isQuotaError(err)) throw err;
-            console.warn("[tabs] localStorage 配额不足，砍半 cliBlocks 重试");
+      // 共享 storage：桌面端写 localStorage + 同步推 Rust 镜像；移动端纯走 IPC
+      // 拿镜像。后端镜像没有配额限制；只有桌面端 localStorage 可能撞 quota，
+      // 这种情况下 onLocalQuotaError 砍 cliBlocks 后自己重试 localStorage（IPC 已写）。
+      storage: createSharedStorage({
+        onLocalQuotaError: (key, raw, err) => {
+          if (!isQuotaError(err)) {
+            console.warn("[tabs] localStorage write failed", err);
+            return false;
           }
-          // 第一次失败：把每个 tab 的 cliBlocks 砍半再写
+          console.warn("[tabs] localStorage 配额不足，砍半 cliBlocks 重试");
           try {
-            const parsed = JSON.parse(v) as { state?: { tabs?: Record<string, TabState> } };
+            const parsed = JSON.parse(raw) as {
+              state?: { tabs?: Record<string, TabState> };
+            };
             if (parsed.state?.tabs) {
               for (const id of Object.keys(parsed.state.tabs)) {
                 const blocks = parsed.state.tabs[id].cliBlocks ?? [];
-                parsed.state.tabs[id].cliBlocks = blocks.slice(-Math.floor(blocks.length / 2));
+                parsed.state.tabs[id].cliBlocks = blocks.slice(
+                  -Math.floor(blocks.length / 2),
+                );
               }
-              localStorage.setItem(k, JSON.stringify(parsed));
-              return;
+              try {
+                localStorage.setItem(key, JSON.stringify(parsed));
+                return true;
+              } catch {
+                // 砍半还撞 → 彻底丢 cliBlocks
+                for (const id of Object.keys(parsed.state.tabs)) {
+                  parsed.state.tabs[id].cliBlocks = [];
+                }
+                localStorage.setItem(key, JSON.stringify(parsed));
+                return true;
+              }
             }
           } catch (e) {
-            console.warn("[tabs] 砍半重试失败", e);
+            console.error("[tabs] quota fallback parse 失败", e);
           }
-          // 第二次失败：彻底丢掉 cliBlocks 兜底
-          try {
-            const parsed = JSON.parse(v) as { state?: { tabs?: Record<string, TabState> } };
-            if (parsed.state?.tabs) {
-              for (const id of Object.keys(parsed.state.tabs)) {
-                parsed.state.tabs[id].cliBlocks = [];
-              }
-              localStorage.setItem(k, JSON.stringify(parsed));
-            }
-          } catch (e) {
-            console.error("[tabs] 持久化彻底失败", e);
-          }
+          // localStorage 没救出来无所谓 —— Rust 镜像里已经存着完整数据
+          return true;
         },
-      })),
+      }),
       partialize: (state) =>
         ({
           tabs: Object.fromEntries(
-            Object.entries(state.tabs).map(([id, tab]) => [id, sanitizeTabForPersist(tab)]),
+            Object.entries(state.tabs).map(([id, tab]) => [id, compactTabForPersist(tab)]),
           ),
           order: state.order,
           activeTabId: state.activeTabId,
           history: state.history.slice(0, HISTORY_LIMIT),
         }) as unknown as TabsStoreState,
-      // 重启加载时再 sanitize 一次，防止旧版本残留运行时字段
+      // 仅"初次 hydrate"（页面/app 第一次加载）时清运行态。
+      // 后续 rehydrate（跨设备 storage://changed 触发的）保留 storage 里的真实
+      // 运行态，让多端实时同步 uiState/agentStatus/mode/percent/bubble 等字段。
       onRehydrateStorage: () => (state) => {
         if (!state) return;
-        for (const id of Object.keys(state.tabs)) {
-          state.tabs[id] = sanitizeTabForPersist(state.tabs[id]);
+        if (isFirstTabsHydration) {
+          isFirstTabsHydration = false;
+          for (const id of Object.keys(state.tabs)) {
+            state.tabs[id] = sanitizeTabOnInitialLoad(state.tabs[id]);
+          }
         }
         // 旧版本没有 history 字段，rehydrate 后是 undefined，兜底为空数组
         if (!Array.isArray(state.history)) state.history = [];
@@ -531,6 +544,11 @@ export const useTabsStore = create<TabsStoreState>()(
     },
   ),
 );
+
+// 跨设备同步：其它客户端改了 tabs 后 rehydrate
+onStorageExternalChange("galcode_tabs", () => {
+  void useTabsStore.persist.rehydrate();
+});
 
 function isQuotaError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;

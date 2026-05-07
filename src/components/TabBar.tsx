@@ -8,7 +8,7 @@
 // - 单击切换；中键关闭；双击 active tab 进入重命名
 // - 鼠标滚轮可水平滚动 tab 列表（tabs 多时）
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/bridge";
 import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../stores/useAppStore";

@@ -73,6 +73,81 @@ pub fn select_project_folder(app: AppHandle) -> Result<Option<String>, String> {
     }))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryEntry {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryListing {
+    /// 当前列出的目录的绝对路径
+    pub path: String,
+    /// 父目录的绝对路径；根目录时为 None
+    pub parent: Option<String>,
+    /// 子目录列表（不含文件，按名称排序，跳过点开头的隐藏项）
+    pub entries: Vec<DirectoryEntry>,
+}
+
+/// 列目录子项（仅目录），给移动端 / LAN 客户端做项目目录选择用。
+/// `path` 为 None / 空时返回用户家目录。Tauri 桌面端通常用原生 dialog，
+/// 不会调用本命令，但保留以备 web 调试。
+#[tauri::command]
+pub fn list_directory(path: Option<String>) -> Result<DirectoryListing, String> {
+    let target = match path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(p) => std::path::PathBuf::from(p),
+        None => std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| "无法确定家目录（HOME / USERPROFILE 都没设置）".to_string())?,
+    };
+
+    if !target.exists() {
+        return Err(format!("目录不存在: {}", target.display()));
+    }
+    if !target.is_dir() {
+        return Err(format!("不是目录: {}", target.display()));
+    }
+
+    let read = std::fs::read_dir(&target)
+        .map_err(|e| format!("读目录失败 {}: {e}", target.display()))?;
+
+    let mut entries: Vec<DirectoryEntry> = Vec::new();
+    for item in read {
+        let Ok(entry) = item else { continue };
+        let Ok(file_type) = entry.file_type() else { continue };
+        // 跟随 symlink 目录，但仅列目录
+        if !file_type.is_dir()
+            && !(file_type.is_symlink() && entry.path().is_dir())
+        {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // 跳过点开头隐藏项（避免 .git / .DS_Store / .config 等噪音）
+        if name.starts_with('.') {
+            continue;
+        }
+        entries.push(DirectoryEntry {
+            name,
+            path: entry.path().to_string_lossy().into_owned(),
+        });
+    }
+    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    let parent = target
+        .parent()
+        .filter(|p| p.as_os_str() != target.as_os_str())
+        .map(|p| p.to_string_lossy().into_owned());
+
+    Ok(DirectoryListing {
+        path: target.to_string_lossy().into_owned(),
+        parent,
+        entries,
+    })
+}
+
 /// 中文任务 → 翻译 → 启动 Agent（claude-code / opencode / codex / demo）。
 /// 工作目录默认 `.`，可通过 `cwd` 指定。
 ///
@@ -705,4 +780,326 @@ pub async fn opencode_send_prompt(
     )
     .await?;
     Ok(json!({ "text": final_text, "raw": raw }))
+}
+
+// ---------------------------------------------------------------------------
+// 局域网移动端访问（lan_*）
+//
+// 让用户在桌面端开一个内置 HTTP 服务（绑 0.0.0.0:port），手机扫 URL 即可登录管理项目。
+// 设计要点：
+//   - 必须先设置密码才能启用：lan_set_password 写哈希；启用时若密码空 → 拒绝
+//   - 改密码自动撤销所有现有 token：避免老设备无声续用
+//   - 启停是同步的：spawn_server 在 Rust 主进程开线程，立刻返回端口；前端马上能取 URL
+//   - 前端定期 invoke lan_sync_projects 把 tabs/history 推过来，HTTP 服务端拿到镜像直发
+//     给移动端 —— 避免在 Rust 端再造一套项目数据模型
+// ---------------------------------------------------------------------------
+
+use crate::lan::config::{self as lan_config, LanConfig};
+use crate::lan::network as lan_network;
+use crate::lan::state::{LanRuntimeState, ProjectsSnapshot, ProjectSnapshotItem};
+use crate::lan::{auth as lan_auth, server as lan_server};
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanDeviceInfo {
+    pub label: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+    /// 出于隐私，前端只展示 token 前 6 字（足够区分多个设备）
+    pub token_preview: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanStateInfo {
+    pub enabled: bool,
+    pub running: bool,
+    pub port: u16,
+    pub running_port: Option<u16>,
+    pub has_password: bool,
+    /// 局域网可访问的完整 URL（取局域网 IPv4 + port 拼出来）
+    pub urls: Vec<String>,
+    /// 主机所有探测到的 IPv4 地址（含 LAN 与可能的公网/VPN 地址）
+    pub interfaces: Vec<String>,
+    pub devices: Vec<LanDeviceInfo>,
+}
+
+fn build_state_info(app: &AppHandle, cfg: &LanConfig, lan: &LanRuntimeState) -> LanStateInfo {
+    let server = lan.server.lock().ok();
+    let running = server.as_ref().map(|s| s.thread.is_some()).unwrap_or(false);
+    let running_port = server.as_ref().and_then(|s| s.running_port);
+    let port = running_port.unwrap_or(cfg.port);
+    let _ = app; // 预留：未来加 OS 名称、平台 hint
+    let interfaces = lan_network::detect_lan_ipv4();
+    let urls = if running {
+        interfaces
+            .iter()
+            .filter(|ip| lan_network::is_lan_ipv4(ip))
+            .map(|ip| format!("http://{ip}:{port}/"))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let devices = cfg
+        .tokens
+        .iter()
+        .map(|t| LanDeviceInfo {
+            label: t.label.clone(),
+            created_at: t.created_at,
+            expires_at: t.expires_at,
+            token_preview: t.token.chars().take(6).collect(),
+        })
+        .collect();
+    LanStateInfo {
+        enabled: cfg.enabled,
+        running,
+        port: cfg.port,
+        running_port,
+        has_password: cfg.has_password(),
+        urls,
+        interfaces,
+        devices,
+    }
+}
+
+#[tauri::command]
+pub fn lan_get_state(
+    app: AppHandle,
+    lan: State<Arc<LanRuntimeState>>,
+) -> Result<LanStateInfo, String> {
+    let cfg = lan_config::load(&app);
+    Ok(build_state_info(&app, &cfg, lan.inner()))
+}
+
+#[tauri::command]
+pub fn lan_set_password(
+    app: AppHandle,
+    lan: State<Arc<LanRuntimeState>>,
+    password: String,
+) -> Result<LanStateInfo, String> {
+    let trimmed = password.trim();
+    if trimmed.len() < 4 {
+        return Err("密码至少 4 位".to_string());
+    }
+    let mut cfg = lan_config::load(&app);
+    let salt = lan_auth::generate_salt();
+    let hash = lan_auth::hash_password(&salt, trimmed);
+    cfg.password_salt = salt;
+    cfg.password_hash = hash;
+    // 改密 → 强制所有移动端重新登录（防止老 token 无声续用）
+    cfg.tokens.clear();
+    lan_config::save(&app, &cfg)?;
+    Ok(build_state_info(&app, &cfg, lan.inner()))
+}
+
+#[tauri::command]
+pub fn lan_clear_password(
+    app: AppHandle,
+    lan: State<Arc<LanRuntimeState>>,
+) -> Result<LanStateInfo, String> {
+    let mut cfg = lan_config::load(&app);
+    cfg.password_hash.clear();
+    cfg.password_salt.clear();
+    cfg.tokens.clear();
+    cfg.enabled = false;
+    lan_config::save(&app, &cfg)?;
+    // 同步停服
+    let mut server = lan.server.lock().map_err(|e| e.to_string())?;
+    let thread = server.thread.take();
+    let stop_flag = server.stop_flag.take();
+    server.running_port = None;
+    drop(server);
+    lan_server::stop_server(thread, stop_flag);
+    Ok(build_state_info(&app, &cfg, lan.inner()))
+}
+
+#[tauri::command]
+pub fn lan_set_port(
+    app: AppHandle,
+    lan: State<Arc<LanRuntimeState>>,
+    port: u16,
+) -> Result<LanStateInfo, String> {
+    if port < 1024 {
+        return Err("端口必须 ≥ 1024".to_string());
+    }
+    let mut cfg = lan_config::load(&app);
+    cfg.port = port;
+    lan_config::save(&app, &cfg)?;
+    // 如果当前服务在跑且端口变了，需要重启（用户手动启停最安全；这里只更新配置）
+    Ok(build_state_info(&app, &cfg, lan.inner()))
+}
+
+#[tauri::command]
+pub fn lan_set_enabled(
+    app: AppHandle,
+    lan: State<Arc<LanRuntimeState>>,
+    enabled: bool,
+) -> Result<LanStateInfo, String> {
+    let mut cfg = lan_config::load(&app);
+
+    if enabled {
+        if !cfg.has_password() {
+            return Err("启用前请先设置密码".to_string());
+        }
+        // 已经在跑就直接返回
+        let already_running = lan.server.lock().map(|s| s.thread.is_some()).unwrap_or(false);
+        if !already_running {
+            let (running_port, handle, stop) = lan_server::spawn_server(&app, cfg.port)?;
+            let mut server = lan.server.lock().map_err(|e| e.to_string())?;
+            server.thread = Some(handle);
+            server.stop_flag = Some(stop);
+            server.running_port = Some(running_port);
+        }
+        cfg.enabled = true;
+    } else {
+        let mut server = lan.server.lock().map_err(|e| e.to_string())?;
+        let thread = server.thread.take();
+        let stop_flag = server.stop_flag.take();
+        server.running_port = None;
+        drop(server);
+        lan_server::stop_server(thread, stop_flag);
+        cfg.enabled = false;
+    }
+    lan_config::save(&app, &cfg)?;
+    Ok(build_state_info(&app, &cfg, lan.inner()))
+}
+
+#[tauri::command]
+pub fn lan_revoke_all_devices(
+    app: AppHandle,
+    lan: State<Arc<LanRuntimeState>>,
+) -> Result<LanStateInfo, String> {
+    let mut cfg = lan_config::load(&app);
+    cfg.tokens.clear();
+    lan_config::save(&app, &cfg)?;
+    Ok(build_state_info(&app, &cfg, lan.inner()))
+}
+
+/// 前端调用：把当前 tabs / history 的精简快照推到后端，HTTP 接口直接读它。
+/// 设计权衡：项目数据真相在前端 zustand+localStorage，后端要么 IPC 反查要么复制一份。
+/// 复制一份内存最简单，30s 一次 push 就够移动端用。
+#[tauri::command]
+pub fn lan_sync_projects(
+    lan: State<Arc<LanRuntimeState>>,
+    items: Vec<ProjectSnapshotItem>,
+    active_tab_id: Option<String>,
+) -> Result<(), String> {
+    let mut p = lan.projects.lock().map_err(|e| e.to_string())?;
+    *p = ProjectsSnapshot {
+        items,
+        active_tab_id,
+        updated_at: lan_config::unix_now(),
+    };
+    Ok(())
+}
+
+// ===========================================================================
+// 共享 zustand storage（桌面端 ↔ 移动端跨设备数据同步）
+//
+// 设计：
+//   - 桌面端的 zustand persist 通过 createSharedStorage adapter 把每次 setItem
+//     的 key/value 推到 Rust 侧的内存镜像（同时保留 localStorage 作为本地缓存）
+//   - 移动端没有真正的桌面端 localStorage（手机本地是空的），它的 zustand persist
+//     storage 直接走 IPC 读这份镜像
+//   - 任一端 set/remove 后会 emit `storage://changed` / `storage://removed`，
+//     带 source clientId 让其它客户端 rehydrate 自己的 store —— 写入方自己跳过
+//     避免双向回环
+//   - 镜像同步落盘到 <app_config_dir>/lan-storage.json：服务重启 / 桌面端关
+//     webview 后再开移动端不会拿到空数据
+//
+// 注意：这只镜像 zustand persist 层的 JSON 字符串；不解析、不感知 store 内部结构。
+// 这样不管 tabs / settings / profile 哪个 store schema 怎么演进都不需要改 Rust 端。
+// ===========================================================================
+
+/// 列出当前所有镜像里的 key/value 对。客户端启动时调一次拿全量做 hydration。
+#[tauri::command]
+pub fn lan_list_storage(
+    lan: State<Arc<LanRuntimeState>>,
+) -> Result<Vec<(String, String)>, String> {
+    let map = lan.shared_storage.lock().map_err(|e| e.to_string())?;
+    Ok(map.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+}
+
+#[tauri::command]
+pub fn lan_get_storage(
+    lan: State<Arc<LanRuntimeState>>,
+    key: String,
+) -> Result<Option<String>, String> {
+    let map = lan.shared_storage.lock().map_err(|e| e.to_string())?;
+    Ok(map.get(&key).cloned())
+}
+
+/// 写入并广播。`source` 是写入方的 clientId（前端 sharedStorage.ts 生成的随机值），
+/// 其它客户端收到广播时会比对 source 跳过自己的回声。
+///
+/// `notify_webview` 控制是否再用 `app.emit` 通知 Tauri webview：
+///   - 桌面 webview 自己发起的 setItem（已经在自己端设过 state）→ 设 false，
+///     避免"自己 emit 自己又收到"一次无意义 IPC 来回
+///   - 移动端通过 HTTP 发起的 setItem → 设 true（默认），让桌面 webview 也能 rehydrate
+///   - 不论哪种情况都直接 push 到 EventBus，移动端长轮询路径不依赖 app.emit
+///
+/// 性能：高频 set（agent 流式 ~10Hz）只更新内存 HashMap + 入 EventBus + 必要时 emit，
+/// 写盘走 800ms debounce —— 多次 set 在窗口内合并为一次 IO。
+#[tauri::command]
+pub fn lan_set_storage(
+    app: AppHandle,
+    lan: State<Arc<LanRuntimeState>>,
+    key: String,
+    value: String,
+    source: Option<String>,
+    notify_webview: Option<bool>,
+) -> Result<(), String> {
+    use tauri::Emitter;
+    {
+        let mut map = lan.shared_storage.lock().map_err(|e| e.to_string())?;
+        // 短路：值没变就不广播 / 不调度落盘，避免桌面端 zustand 里"看起来等价但 JSON
+        // 序列化字节序略有差异"的 setState 反复造成无意义事件
+        if map.get(&key).map(|v| v == &value).unwrap_or(false) {
+            return Ok(());
+        }
+        map.insert(key.clone(), value.clone());
+    }
+    let payload = json!({
+        "key": key,
+        "value": value,
+        "source": source.unwrap_or_default(),
+    });
+    // 移动端 / 其它 LAN 客户端走长轮询拿事件 —— 直接 append（不经过 Tauri 事件总线）
+    lan.event_bus
+        .append("storage://changed".to_string(), payload.clone());
+    // 仅当调用方不是桌面 webview 自己时才 emit 给 webview（避免回声）
+    if notify_webview.unwrap_or(true) {
+        let _ = app.emit("storage://changed", payload);
+    }
+    crate::lan::shared_storage::schedule_save(&app, lan.inner());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn lan_remove_storage(
+    app: AppHandle,
+    lan: State<Arc<LanRuntimeState>>,
+    key: String,
+    source: Option<String>,
+    notify_webview: Option<bool>,
+) -> Result<(), String> {
+    use tauri::Emitter;
+    {
+        let mut map = lan.shared_storage.lock().map_err(|e| e.to_string())?;
+        if !map.contains_key(&key) {
+            return Ok(());
+        }
+        map.remove(&key);
+    }
+    let payload = json!({
+        "key": key,
+        "source": source.unwrap_or_default(),
+    });
+    lan.event_bus
+        .append("storage://removed".to_string(), payload.clone());
+    if notify_webview.unwrap_or(true) {
+        let _ = app.emit("storage://removed", payload);
+    }
+    crate::lan::shared_storage::schedule_save(&app, lan.inner());
+    Ok(())
 }

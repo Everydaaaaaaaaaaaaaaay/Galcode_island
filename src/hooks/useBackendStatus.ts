@@ -3,7 +3,7 @@
 // 不做轮询——状态变化由用户操作触发，定时检查徒增 CLI 启动开销（version 缓存 5min，
 // status 命令本身要 spawn 一次 CLI 拿 version）。
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/bridge";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ClaudeStatus,

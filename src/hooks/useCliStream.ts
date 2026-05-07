@@ -15,7 +15,7 @@
 //   - command output delta：output 字段累积更新
 //   - todo：items 数组覆盖
 
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "../lib/bridge";
 import { useEffect } from "react";
 import { useTabsStore } from "../stores/useTabsStore";
 import type { CliBlock, CliStreamEvent } from "../types/blocks";

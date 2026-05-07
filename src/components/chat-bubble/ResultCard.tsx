@@ -1,9 +1,10 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/bridge";
 import { useRef, useState, type KeyboardEvent } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { useTabsStore } from "../../stores/useTabsStore";
 import { useActiveTab, useActiveTabActions } from "../../hooks/useActiveTab";
 import { motion, AnimatePresence } from "framer-motion";
+import { PetCharacter } from "../pet-character/PetCharacter";
 
 export function ResultCard(): JSX.Element {
   const tab = useActiveTab();
@@ -112,6 +113,7 @@ export function ResultCard(): JSX.Element {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -10, scale: 0.98 }}
           transition={{ type: "spring", damping: 22, stiffness: 280 }}
+          // 自然高度，不撑高度容器；summary 区自带 max-h cap + 滚动
           className="relative w-full rounded-2xl shadow-lg shadow-amber-500/10 dark:shadow-none"
         >
           {/* 真·环绕光效：背景 conic-gradient 的 from 角度做动画（用 @property
@@ -119,40 +121,61 @@ export function ResultCard(): JSX.Element {
               光段在边框上平滑滑动一圈。详细 CSS 在 index.css `.glow-frame`。 */}
           <div aria-hidden="true" className="glow-frame rounded-2xl" />
 
-          {/* Inner glass content container */}
-          <div className="relative flex h-full w-full flex-col gap-3 rounded-2xl border border-white/60 bg-white/70 p-4 backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60">
-            {/* Header */}
-            <div className="flex items-center gap-2">
+          {/* Inner glass content container —— 自然高度三段式：头 / summary（自带
+              max-h cap + 滚动） / 底。不用 flex-1，避免在无具体父高度时 flex-1=0
+              导致 summary 区高度坍塌的 CSS 循环依赖问题。 */}
+          <div className="relative flex w-full flex-col gap-3 overflow-hidden rounded-2xl border border-white/60 bg-white/70 p-3.5 backdrop-blur-2xl sm:p-4 dark:border-white/10 dark:bg-slate-800/60">
+            {/* ===== 顶部：状态徽章 ===== */}
+            <div className="flex shrink-0 items-center gap-2">
               <div className={`h-2.5 w-2.5 rounded-full ${isError ? "bg-rose-400 shadow-[0_0_6px_rgba(251,113,133,0.5)]" : "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]"} animate-pulse`} />
-              <span className={`text-sm font-extrabold uppercase tracking-widest ${headerColor}`}>
+              <span className={`text-[13px] font-extrabold uppercase tracking-widest sm:text-sm ${headerColor}`}>
                 {mode || "COMPLETE"}
               </span>
             </div>
 
-            {/* Emotion Speech */}
+            {/* 移动端嵌入式头部：左 桌宠 compact + 右 emotion 气泡 */}
+            <div className="flex shrink-0 items-start gap-3 sm:hidden">
+              <div className="shrink-0">
+                <PetCharacter size="compact" />
+              </div>
+              {emotionText ? (
+                <div className="relative min-w-0 flex-1 self-stretch rounded-t-2xl rounded-br-2xl rounded-bl-sm border border-white/50 bg-white/70 p-3 shadow-sm backdrop-blur-md dark:border-white/10 dark:bg-slate-700/60">
+                  <p className="text-[15px] font-bold leading-snug text-zinc-800 dark:text-zinc-100">
+                    {emotionText}
+                  </p>
+                </div>
+              ) : (
+                <div className="flex-1 self-stretch flex items-center text-zinc-400 text-[13px] dark:text-zinc-500">
+                  ……
+                </div>
+              )}
+            </div>
+
+            {/* 桌面端 emotion 气泡（移动端已内嵌到上方头部） */}
             {emotionText && (
-              <div className="relative rounded-t-2xl rounded-br-2xl rounded-bl-sm border border-white/50 bg-white/70 p-4 shadow-sm backdrop-blur-md dark:border-white/10 dark:bg-slate-700/60">
+              <div className="relative hidden shrink-0 rounded-t-2xl rounded-br-2xl rounded-bl-sm border border-white/50 bg-white/70 p-4 shadow-sm backdrop-blur-md sm:block dark:border-white/10 dark:bg-slate-700/60">
                 <p className="text-[15px] font-bold leading-snug text-zinc-800 dark:text-zinc-100">
                   {emotionText}
                 </p>
               </div>
             )}
 
-            {/* Summary */}
+            {/* ===== 中部：Summary —— max-h cap + 内部滚动；自然高度。
+                移动端 35vh 大约给 8-10 行；桌面端无上限保持原视觉。 ===== */}
             {summaryTranslation && (
-              <div className="px-1 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
+              <div className="max-h-[35vh] overflow-y-auto overscroll-contain px-1 text-[14px] leading-relaxed text-zinc-600 sm:max-h-none sm:overflow-visible sm:text-sm dark:text-zinc-300">
                 {summaryTranslation}
               </div>
             )}
 
-            {/* Suggestion Options */}
+            {/* ===== 底部：Suggestion 选项 + 输入框（不滚） ===== */}
             {suggestionOptions?.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-2 pt-1 border-t border-zinc-200/50 dark:border-zinc-700/50">
+              <div className="flex shrink-0 flex-wrap gap-2 border-t border-zinc-200/50 pt-2 dark:border-zinc-700/50">
                 {suggestionOptions.map((opt, i) => (
                   <button
                     key={i}
                     onClick={() => void handleOptionClick(opt)}
-                    className="flex items-center rounded-full border border-white/40 bg-white/50 px-3.5 py-1.5 text-xs font-semibold text-zinc-700 shadow-sm backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:bg-white hover:text-zinc-900 hover:shadow-md active:translate-y-0 active:scale-95 dark:border-white/10 dark:bg-slate-700/50 dark:text-zinc-300 dark:hover:bg-slate-600 dark:hover:text-white"
+                    className="flex min-h-[36px] items-center rounded-full border border-white/40 bg-white/50 px-4 py-2 text-[13px] font-semibold text-zinc-700 shadow-sm backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:bg-white hover:text-zinc-900 hover:shadow-md active:translate-y-0 active:scale-95 sm:min-h-0 sm:px-3.5 sm:py-1.5 sm:text-xs dark:border-white/10 dark:bg-slate-700/50 dark:text-zinc-300 dark:hover:bg-slate-600 dark:hover:text-white"
                   >
                     {opt}
                   </button>
@@ -161,7 +184,7 @@ export function ResultCard(): JSX.Element {
             )}
 
             {/* 永久输入框：除了选项按钮之外用户始终能直接打字继续会话 */}
-            <div className="mt-2 flex items-end gap-2 border-t border-zinc-200/50 pt-2 dark:border-zinc-700/50">
+            <div className="flex shrink-0 items-end gap-2 border-t border-zinc-200/50 pt-2 dark:border-zinc-700/50">
               <textarea
                 value={followupText}
                 onChange={(e) => setFollowupText(e.target.value)}
@@ -174,14 +197,16 @@ export function ResultCard(): JSX.Element {
                 }}
                 placeholder="继续追问…  (Enter 发送，Shift+Enter 换行)"
                 rows={1}
-                className="min-h-[36px] max-h-32 flex-1 resize-y rounded-xl border border-black/5 bg-white/55 px-3 py-2 text-sm text-zinc-800 outline-none transition-all placeholder:text-zinc-400 focus:border-sky-400/50 focus:bg-white/85 focus:ring-2 focus:ring-sky-400/15 dark:border-white/5 dark:bg-slate-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-sky-400/40 dark:focus:bg-slate-900/60 dark:focus:ring-sky-400/10"
+                // 移动端 text-base 防 iOS focus 放大；桌面端 text-sm 保密度
+                className="min-h-[44px] max-h-32 flex-1 resize-y rounded-xl border border-black/5 bg-white/55 px-3 py-2.5 text-base text-zinc-800 outline-none transition-all placeholder:text-zinc-400 focus:border-sky-400/50 focus:bg-white/85 focus:ring-2 focus:ring-sky-400/15 sm:min-h-[36px] sm:py-2 sm:text-sm dark:border-white/5 dark:bg-slate-900/40 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-sky-400/40 dark:focus:bg-slate-900/60 dark:focus:ring-sky-400/10"
               />
               <button
                 type="button"
                 onClick={submitFollowup}
                 disabled={!followupText.trim()}
                 aria-label="发送"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-500 text-white shadow-md shadow-sky-400/25 transition-all hover:bg-sky-600 hover:shadow-sky-400/40 active:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-40"
+                // 移动端 44x44 触控目标；桌面端 36x36 保紧凑
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-500 text-white shadow-md shadow-sky-400/25 transition-all hover:bg-sky-600 hover:shadow-sky-400/40 active:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-40 sm:h-9 sm:w-9"
               >
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
                   <path d="M2.5 8h11M9 3.5L13.5 8 9 12.5" strokeLinecap="round" strokeLinejoin="round" />

@@ -1,16 +1,19 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "./lib/bridge";
 import { useEffect, useMemo } from "react";
 import { MainView } from "./components/MainView";
+import { MobileTopBar } from "./components/MobileTopBar";
 import { WelcomeView } from "./components/welcome/WelcomeView";
 import { SettingsModal } from "./components/settings/SettingsModal";
 import { ProfileModal } from "./components/profile/ProfileModal";
 import { SidebarLeft } from "./components/sidebar/SidebarLeft";
 import { SidebarRight } from "./components/sidebar/SidebarRight";
 import { InPageSearch } from "./components/InPageSearch";
+import { useUiStore } from "./stores/useUiStore";
 import { useAgentIPC } from "./hooks/useAgentIPC";
 import { useCliStream } from "./hooks/useCliStream";
 import { useInPageSearchHotkey } from "./hooks/useInPageSearchHotkey";
+import { useLanProjectsSync } from "./hooks/useLanProjectsSync";
 import { useTabsReattach } from "./hooks/useTabsReattach";
 import { useThemeHotkey } from "./hooks/useThemeHotkey";
 import { useAppStore } from "./stores/useAppStore";
@@ -19,14 +22,21 @@ import { useProfileStore } from "./stores/useProfileStore";
 
 function App(): JSX.Element {
   const isStarted = useAppStore((state) => state.isStarted);
+  const mobileLeftDrawerOpen = useUiStore((s) => s.mobileLeftDrawerOpen);
+  const closeMobileLeftDrawer = useUiStore((s) => s.closeMobileLeftDrawer);
 
   useThemeHotkey();
   useAgentIPC();
   useCliStream();
   useTabsReattach();
   useInPageSearchHotkey();
+  useLanProjectsSync();
 
   useEffect(() => {
+    // 浏览器（局域网客户端）模式：不要把自己 zustand 里可能为空的 settings 推给后端
+    // 单例——后端是桌面端的真相，浏览器只读；不然会用空表覆盖桌面端用户已设置的 LLM key。
+    if (!isTauri) return;
+
     const state = useSettingsStore.getState();
     const profile = useProfileStore.getState();
 
@@ -60,26 +70,60 @@ function App(): JSX.Element {
     }
   }, []);
 
-  // 三栏布局：isStarted=true 时左栏 SidebarLeft + 中栏 MainView + 右栏 SidebarRight
-  // （右栏按 useUiStore.detailBlock 决定开合）；isStarted=false 时只显示 WelcomeView
-  // 占满整个内容区，左右栏不渲染（用户还没开始项目）。
+  // 桌面端三栏；移动端 (<lg) 单栏 + 抽屉：
+  //   - 顶部 MobileTopBar（汉堡 → 左栏抽屉 / 设置）
+  //   - 中部 MainView 占满
+  //   - SidebarLeft 在 <lg 时绝对定位 + translate-x 控制开合，背后加遮罩点击关闭
+  //   - SidebarRight 在 <lg 时全屏覆盖（保留 detailBlock 详情体验）
+  //   - 桌宠 / 立绘 / 结果卡 / 凉宫春日总结由 MainView 内部继续渲染，移动端不变
   const currentScreen = useMemo(() => {
     if (!isStarted) return <WelcomeView />;
     return (
-      <div className="relative flex h-full w-full">
-        <SidebarLeft />
-        <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative flex h-full w-full flex-col lg:flex-row">
+        {/* 移动端顶栏：汉堡 / 当前项目 / 设置 —— 桌面端隐藏 */}
+        <MobileTopBar />
+
+        {/* 左栏：桌面端常驻；< lg 时绝对定位抽屉 + 遮罩点击关闭。
+            移动端用 top-0 + h-[100dvh] 而不是 inset-y-0：fixed 元素的 inset-y-0
+            在 iOS Safari 引用大视口（含底部地址栏）→ 抽屉底部会被浏览器栏挡住；
+            h-[100dvh] 跟着可视区动态变化，浏览器栏显隐时 reflow */}
+        <div
+          className={`fixed top-0 left-0 z-30 h-[100dvh] w-[78%] max-w-[320px] transform transition-transform duration-200 ease-out lg:relative lg:z-auto lg:h-full lg:w-auto lg:max-w-none lg:translate-x-0 ${
+            mobileLeftDrawerOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
+        >
+          <SidebarLeft />
+        </div>
+        {mobileLeftDrawerOpen && (
+          <button
+            type="button"
+            aria-label="关闭侧边栏"
+            onClick={closeMobileLeftDrawer}
+            className="fixed top-0 left-0 z-20 h-[100dvh] w-full bg-black/30 backdrop-blur-[2px] lg:hidden"
+          />
+        )}
+
+        {/* min-h-0 关键！flex 子项默认 min-height: auto = max-content，
+            BlockStream 内容多时会把这个 div 撑到 max-content，让内部所有
+            flex-1 / overflow-y-auto 失效（StatusMonitor 跟着撑大、流式区不滚、卡片挤出屏） */}
+        <div className="flex min-w-0 min-h-0 flex-1 flex-col">
           <MainView />
         </div>
+
+        {/* 右栏（详情）：桌面端 inline；< lg 时全屏 fixed 覆盖 */}
         <SidebarRight />
+
         {/* cmd+f 触发的页内搜索浮窗：只在主界面挂，绝对定位浮在右上角 */}
         <InPageSearch />
       </div>
     );
-  }, [isStarted]);
+  }, [isStarted, mobileLeftDrawerOpen, closeMobileLeftDrawer]);
 
+  // 100dvh 而非 100vh：移动浏览器底部地址栏会算进 100vh 但实际遮挡内容；
+  // 100dvh = dynamic viewport height，浏览器栏显隐时自动 reflow，
+  // 子链所有 h-full / inset-0 单位都跟着正确
   return (
-    <main className="relative h-screen w-screen overflow-hidden bg-slate-50 text-zinc-900 transition-colors dark:bg-[#0B1120] dark:text-zinc-100">
+    <main className="relative h-[100dvh] w-screen overflow-hidden bg-slate-50 text-zinc-900 transition-colors dark:bg-[#0B1120] dark:text-zinc-100">
       {/* Dynamic diffused light background */}
       <motion.div
         className="pointer-events-none absolute inset-0"
@@ -129,8 +173,8 @@ function App(): JSX.Element {
         />
       </motion.div>
 
-      {/* Glass container */}
-      <div className="absolute inset-2 overflow-hidden rounded-[22px] border border-white/60 bg-white/70 shadow-[0_8px_40px_rgba(0,0,0,0.06)] backdrop-blur-2xl dark:border-white/10 dark:bg-slate-800/60 dark:shadow-none">
+      {/* Glass container —— 桌面端 inset-2 浮起感；移动端贴边铺满，最大化可用区 */}
+      <div className="absolute inset-0 overflow-hidden border border-white/60 bg-white/70 backdrop-blur-2xl sm:inset-2 sm:rounded-[22px] sm:shadow-[0_8px_40px_rgba(0,0,0,0.06)] dark:border-white/10 dark:bg-slate-800/60 dark:shadow-none">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_18%,rgba(255,255,255,0.3),transparent_38%),radial-gradient(circle_at_88%_82%,rgba(0,0,0,0.04),transparent_30%)] dark:bg-[radial-gradient(circle_at_12%_18%,rgba(255,255,255,0.04),transparent_38%),radial-gradient(circle_at_88%_82%,rgba(255,255,255,0.02),transparent_30%)]" />
         <AnimatePresence mode="wait">
           <motion.div

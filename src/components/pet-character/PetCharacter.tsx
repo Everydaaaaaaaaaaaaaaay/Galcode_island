@@ -47,7 +47,28 @@ const THINKING_STATUSES: ReadonlySet<AgentStatus> = new Set<AgentStatus>([
   "processing",
 ]);
 
-export function PetCharacter(): JSX.Element {
+/// 桌宠尺寸：
+///   default — 主区独立桌宠（桌面端常用）：移动端 h-32 → 桌面 h-52
+///   compact — 嵌入卡片头部（移动端整屏卡片用）：固定 h-20 全屏一律 80px，
+///             目的是让 emotion 文字与桌宠并排时不挤占太多卡片高度
+type PetSize = "default" | "compact";
+
+interface PetCharacterProps {
+  size?: PetSize;
+}
+
+const SIZE_CLASSES: Record<PetSize, { wrap: string; img: string }> = {
+  default: {
+    wrap: "h-32 w-32 sm:h-40 sm:w-40 lg:h-52 lg:w-52",
+    img: "h-24 w-24 sm:h-32 sm:w-32 lg:h-40 lg:w-40",
+  },
+  compact: {
+    wrap: "h-20 w-20",
+    img: "h-16 w-16",
+  },
+};
+
+export function PetCharacter({ size = "default" }: PetCharacterProps): JSX.Element {
   const tab = useActiveTab();
   const uiState = tab.uiState;
   const agentStatus = tab.agentStatus;
@@ -74,6 +95,8 @@ export function PetCharacter(): JSX.Element {
     }
   }, [canSwapExpression]);
 
+  const { wrap, img } = SIZE_CLASSES[size];
+
   return (
     <motion.div
       whileHover={{ scale: 1.03 }}
@@ -85,7 +108,7 @@ export function PetCharacter(): JSX.Element {
         mass: 0.7,
       }}
       onClick={handleClick}
-      className="relative flex h-52 w-52 cursor-pointer select-none items-center justify-center"
+      className={`relative flex cursor-pointer select-none items-center justify-center ${wrap}`}
       role="img"
       aria-label="桌宠角色"
     >
@@ -96,7 +119,7 @@ export function PetCharacter(): JSX.Element {
         initial={{ opacity: 0, scale: 0.85 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.2, ease: "easeOut" }}
-        className="h-40 w-40 object-contain drop-shadow-xl"
+        className={`object-contain drop-shadow-xl ${img}`}
         draggable={false}
       />
     </motion.div>

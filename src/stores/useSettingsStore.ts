@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { createSharedStorage, onStorageExternalChange } from "../lib/sharedStorage";
 
 export type BackendKey = "claude-code" | "codex" | "opencode";
 
@@ -191,6 +192,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: "agent-settings-storage",
+      storage: createSharedStorage(),
       // 兼容老版本 persist：之前的 BackendPrefs 只有 model/effort/proxy/binary 四个字段，
       // 现在加了 provider/apiKey/authMode 后，旧的 localStorage 数据还原回来时会缺这三个，
       // 后续访问 prefs.X 时是 undefined，碰到 .trim() / `<select value={undefined}>` 会让
@@ -218,3 +220,9 @@ export const useSettingsStore = create<SettingsState>()(
     }
   )
 );
+
+// 跨设备同步：其它客户端改了 settings 后，后端 broadcast storage://changed →
+// 自动 rehydrate 让 UI 反映最新值
+onStorageExternalChange("agent-settings-storage", () => {
+  void useSettingsStore.persist.rehydrate();
+});

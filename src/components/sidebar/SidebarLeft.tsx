@@ -8,6 +8,7 @@
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { MouseEvent } from "react";
+import { isTauri } from "../../lib/bridge";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppStore } from "../../stores/useAppStore";
 import { useUiStore } from "../../stores/useUiStore";
@@ -33,7 +34,7 @@ function MenuButton({ label, icon, onClick, active }: MenuButtonProps): JSX.Elem
       type="button"
       onClick={onClick}
       title={label}
-      className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-[12px] font-medium transition-colors ${
+      className={`flex h-11 w-full items-center gap-2.5 rounded-md px-2 text-[14px] font-medium transition-colors sm:h-8 sm:gap-2 sm:text-[12px] ${
         active
           ? "bg-sky-400/15 text-sky-700 dark:bg-sky-400/15 dark:text-sky-200"
           : "text-zinc-600 hover:bg-black/5 dark:text-zinc-300 dark:hover:bg-white/5"
@@ -56,9 +57,13 @@ export function SidebarLeft(): JSX.Element {
   const leftSidebarView = useUiStore((s) => s.leftSidebarView);
   const setLeftSidebarView = useUiStore((s) => s.setLeftSidebarView);
   const historyCount = useTabsStore((s) => s.history.length);
-  const appWindow = getCurrentWindow();
+  // 浏览器（LAN 客户端）模式下没有 Tauri 窗口，getCurrentWindow 调用会抛错
+  // —— 用 null 标记跳过窗口控制 UI / drag 行为
+  const appWindow = isTauri ? getCurrentWindow() : null;
+  const closeMobileLeftDrawer = useUiStore((s) => s.closeMobileLeftDrawer);
 
   const handleDragMouseDown = async (event: MouseEvent<HTMLDivElement>): Promise<void> => {
+    if (!appWindow) return;
     if (event.button !== 0) return;
     try {
       await appWindow.startDragging();
@@ -68,22 +73,49 @@ export function SidebarLeft(): JSX.Element {
   };
 
   return (
-    <aside className="flex h-full w-[260px] shrink-0 flex-col border-r border-black/5 bg-white/35 backdrop-blur-md dark:border-white/5 dark:bg-zinc-900/30">
-      {/* 顶部 28px drag/控制条 —— 替代被删掉的 GlobalTopBar */}
+    <aside
+      // 移动端抽屉：fixed inset-y-0 全高 z-30，但 MobileTopBar (z-40) 会盖住顶部
+      // → 给 aside 加 pt = header 高度（2.75rem 基础 + env(safe-area-inset-top) 刘海）
+      // 让菜单内容从 header 下方开始；底部 pb env(safe-area-inset-bottom) 避开 home
+      // indicator。桌面端 lg+ 这两个值自动归零（lg:pt-0 lg:pb-0），不影响内嵌布局。
+      className="flex h-full w-full shrink-0 flex-col border-r border-black/5 bg-white/85 backdrop-blur-md
+                 pt-[calc(2.75rem_+_env(safe-area-inset-top))]
+                 pb-[env(safe-area-inset-bottom)]
+                 lg:w-[260px] lg:bg-white/35 lg:pt-0 lg:pb-0
+                 dark:border-white/5 dark:bg-zinc-900/85 lg:dark:bg-zinc-900/30"
+    >
+      {/* 顶部 28px drag/控制条 —— 替代被删掉的 GlobalTopBar；
+          浏览器（LAN）模式下窗口控制无意义，改成抽屉关闭按钮 */}
       <div className="flex h-7 shrink-0 items-center">
-        {/* mac 左侧 ~72px 给 traffic lights，让红绿灯不挡其它内容 */}
-        {isMacOS && <div className="h-full w-[72px] shrink-0" />}
-        <div
-          data-tauri-drag-region
-          onMouseDown={(event) => { void handleDragMouseDown(event); }}
-          className="h-full flex-1"
-        />
-        {!isMacOS && (
+        {isTauri && isMacOS && <div className="h-full w-[72px] shrink-0" />}
+        {isTauri && (
+          <div
+            data-tauri-drag-region
+            onMouseDown={(event) => { void handleDragMouseDown(event); }}
+            className="h-full flex-1"
+          />
+        )}
+        {!isTauri && (
+          <>
+            <div className="h-full flex-1" />
+            <button
+              type="button"
+              onClick={closeMobileLeftDrawer}
+              aria-label="收起侧边栏"
+              className="mr-1 flex h-5 w-6 items-center justify-center rounded text-zinc-500 transition-colors hover:bg-black/10 dark:text-zinc-400 dark:hover:bg-white/10 lg:hidden"
+            >
+              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3 w-3">
+                <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" strokeLinecap="round" />
+              </svg>
+            </button>
+          </>
+        )}
+        {isTauri && !isMacOS && (
           <div className="flex items-center gap-0.5 pr-1">
             <button
               type="button"
               onClick={async () => {
-                try { await appWindow.minimize(); }
+                try { if (appWindow) await appWindow.minimize(); }
                 catch (error) { console.error("Failed to minimize", error); }
               }}
               className="flex h-5 w-6 items-center justify-center rounded text-zinc-500 transition-colors hover:bg-black/10 dark:text-zinc-400 dark:hover:bg-white/10"
@@ -94,7 +126,7 @@ export function SidebarLeft(): JSX.Element {
             <button
               type="button"
               onClick={async () => {
-                try { await appWindow.toggleMaximize(); }
+                try { if (appWindow) await appWindow.toggleMaximize(); }
                 catch (error) { console.error("Failed to toggle maximize", error); }
               }}
               className="flex h-5 w-6 items-center justify-center rounded text-[10px] text-zinc-500 transition-colors hover:bg-black/10 dark:text-zinc-400 dark:hover:bg-white/10"
@@ -105,7 +137,7 @@ export function SidebarLeft(): JSX.Element {
             <button
               type="button"
               onClick={async () => {
-                try { await appWindow.close(); }
+                try { if (appWindow) await appWindow.close(); }
                 catch (error) { console.error("Failed to close", error); }
               }}
               className="flex h-5 w-6 items-center justify-center rounded text-rose-500 transition-colors hover:bg-rose-400/15 dark:text-rose-300"
